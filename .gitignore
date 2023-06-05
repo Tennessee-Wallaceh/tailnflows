@@ -160,4 +160,4 @@ cython_debug/
 #.idea/
 
 # don't include experiment outputs (too much data)
-experiment_data/*
+experiment_output/*
