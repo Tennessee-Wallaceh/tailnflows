@@ -1,0 +1,17 @@
+name: tailnflows 
+channels:
+  - defaults
+dependencies:
+  - python=3.9
+  - pytorch=1.13.1
+  - jupyter
+  - matplotlib
+  - numpy
+  - scipy
+  - tqdm
+  - pandas
+  - pip>=3.0.0
+  - pip:
+    - posteriordb
+    - nflows==0.14
+    - flowtorch==0.5
