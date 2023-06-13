@@ -1,17 +1,11 @@
-from tailnflows.experiments.experiment_utils import get_project_root
+from tailnflows.utils import get_project_root
 import pandas as pd
 import numpy as np
 import torch
-import os
-
-DATA_PATH = os.environ.get('TAILNFLOWS_DATA', None)
 
 def get_data_path():
-    if DATA_PATH is None:
-        return f'{get_project_root()}/data'
-    else:
-        return DATA_PATH
-    
+    return f'{get_project_root()}/data'
+
 def get_return_data(wanted_symbols=None, top_n_symbols=10):
     assert wanted_symbols is not None or top_n_symbols is not None, 'Need to pass either top_n_symbols or wanted_symbols!'
     

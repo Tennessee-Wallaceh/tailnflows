@@ -1,17 +1,12 @@
 import os
-from pathlib import Path
 import json
 import torch
 import pickle
-import os
 import fnmatch
 import pandas as pd
 
 from tailnflows.models.flow_models import get_model
 from tailnflows.targets import targets
-
-def get_project_root():
-    return Path(__file__).parent.parent
 
 def new_experiment(path):
     if not os.path.exists(path):
