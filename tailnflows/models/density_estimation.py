@@ -61,6 +61,11 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         model = ft_distributions.Flow(base_dist, transformation)
 
     elif model_name == 'RQS_flow':
+        hidden_layer_size = model_kwargs.get('hidden_layer_size', dim  * 2)
+        num_hidden_layers = model_kwargs.get('num_hidden_layers', 2)
+        tail_bound = model_kwargs.get('tail_bound', 3.)
+        num_bins = model_kwargs.get('num_bins', 8)
+        
         base_dist = StandardNormal([dim]) 
         transform = CompositeTransform([
             MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
