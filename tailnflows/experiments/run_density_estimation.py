@@ -36,16 +36,17 @@ def run_experiment(
     # config
     torch.manual_seed(seed)
     torch.set_default_device(device)
-    torch.set_default_dtype(precision_types[precision])
+    dtype = precision_types[precision]
+    torch.set_default_dtype(dtype)
 
     # setup target data
-    x_trn, x_val, x_tst, dim = data_sources[target_name](**target_kwargs)
+    x_trn, x_val, x_tst, dim = data_sources[target_name](dtype, **target_kwargs)
     train_loader = torch.utils.data.DataLoader(x_trn, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
     val_loader = torch.utils.data.DataLoader(x_val, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(x_tst, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
 
     # setup model
-    model = get_model(model_name, dim, model_kwargs)
+    model = get_model(dtype, model_name, dim, model_kwargs)
     parameters = list(model.parameters())
 
     # record experiment details
@@ -181,5 +182,6 @@ if __name__ == '__main__':
         batch_size=200,
         model_name=args.model_name,
         model_kwargs={},
-        device='cpu'
+        device='cpu',
+        precision='float32'
     )

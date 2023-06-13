@@ -6,9 +6,10 @@ import torch
 def get_data_path():
     return f'{get_project_root()}/data'
 
-def get_return_data(wanted_symbols=None, top_n_symbols=10):
+def get_return_data(dtype, wanted_symbols=None, top_n_symbols=10):
     assert wanted_symbols is not None or top_n_symbols is not None, 'Need to pass either top_n_symbols or wanted_symbols!'
-    
+    torch.set_default_dtype(dtype)
+
     target_file = f'{get_data_path()}/VIX.csv'
     vix_data = pd.read_csv(target_file, index_col='Date', parse_dates=True)
     vix_data['Symbol'] = 'VIX'
@@ -56,7 +57,7 @@ def get_return_data(wanted_symbols=None, top_n_symbols=10):
         else:
             joined_data = joined_data.join(new_data)
 
-    x = torch.tensor(joined_data[wanted_symbols].to_numpy())
+    x = torch.tensor(joined_data[wanted_symbols].to_numpy(), dtype=dtype)
     x = x[torch.randperm(x.shape[0])] # shuffle
 
     dim = len(wanted_symbols)

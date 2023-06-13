@@ -25,7 +25,9 @@ from flowtorch import distributions as ft_distributions
 # )
 from tailnflows.models.base_distribution import TrainableStudentT
 
-def get_model(model_name, dim, model_kwargs={}):
+def get_model(dtype, model_name, dim, model_kwargs={}):
+    torch.set_default_dtype(dtype)
+
     if model_name == 'TTF':
         hidden_layer_size = model_kwargs.get('hidden_layer_size', dim  * 2)
         num_hidden_layers = model_kwargs.get('num_hidden_layers', 2)
