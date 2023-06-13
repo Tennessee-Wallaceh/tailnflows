@@ -141,9 +141,9 @@ def run_experiment(
 
     # save training data as np arrays
     training_data = {
-        'train_losses': np.array([loss.detach().numpy() for loss in train_losses]),
-        'val_losses': np.array([loss.detach().numpy() for loss in val_losses]),
-        'test_loss': test_loss.detach().numpy(),
+        'train_losses': np.array([loss.detach().cpu().numpy() for loss in train_losses]),
+        'val_losses': np.array([loss.detach().cpu().numpy() for loss in val_losses]),
+        'test_loss': test_loss.detach().cpu().numpy(),
         'iterations': np.arange(num_epochs),
     }
     with open(f'{path}/training_data.npy', 'wb') as f:
@@ -169,7 +169,7 @@ if __name__ == '__main__':
     
     # fixed config
     lr = 1e-3
-    num_epochs = 500
+    num_epochs = 100
 
     run_experiment(
         seed=args.seed, 
@@ -178,7 +178,7 @@ if __name__ == '__main__':
         grad_clip=False,
         lr=lr, 
         num_epochs=num_epochs, 
-        batch_size=100,
+        batch_size=200,
         model_name=args.model_name,
         model_kwargs={},
         device='cpu'
