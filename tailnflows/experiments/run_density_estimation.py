@@ -41,12 +41,12 @@ def run_experiment(
 
     # setup target data
     x_trn, x_val, x_tst, dim = data_sources[target_name](dtype, **target_kwargs)
-    train_loader = torch.utils.data.DataLoader(x_trn, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(x_val, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(x_tst, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(x_trn.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(x_val.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(x_tst.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
 
     # setup model
-    model = get_model(dtype, model_name, dim, model_kwargs)
+    model = get_model(dtype, model_name, dim, model_kwargs).to(device)
     parameters = list(model.parameters())
 
     # record experiment details
@@ -162,7 +162,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-seed', type=int, action='store', default=0)
     parser.add_argument('-model_name', type=str, action='store', default='TTF')
-    parser.add_argument('-target_config', type=str, action='store', default='top_10')
+    parser.add_argument('-target_config', type=str, action='store', default='top_100')
 
     args = parser.parse_args()
 
@@ -179,9 +179,9 @@ if __name__ == '__main__':
         grad_clip=False,
         lr=lr, 
         num_epochs=num_epochs, 
-        batch_size=200,
+        batch_size=500,
         model_name=args.model_name,
         model_kwargs={},
         device='cpu',
-        precision='float32'
+        precision='float64'
     )
