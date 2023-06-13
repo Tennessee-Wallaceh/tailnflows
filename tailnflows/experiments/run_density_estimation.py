@@ -30,16 +30,19 @@ def run_experiment(
         model_kwargs,
         precision='float64',
         safe_grad=False,
+        device='cpu'
     ):
     
-    torch.set_default_dtype(precision_types[precision])
+    # config
     torch.manual_seed(seed)
+    torch.set_default_device(device)
+    torch.set_default_dtype(precision_types[precision])
 
     # setup target data
     x_trn, x_val, x_tst, dim = data_sources[target_name](**target_kwargs)
-    train_loader = torch.utils.data.DataLoader(x_trn, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(x_val, batch_size=batch_size, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(x_tst, batch_size=batch_size, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(x_trn, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(x_val, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(x_tst, generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
 
     # setup model
     model = get_model(model_name, dim, model_kwargs)
@@ -66,6 +69,7 @@ def run_experiment(
         'run_time': datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"),
         'path': path,
         'dim': dim,
+        'device': device
     }
     write_experiment_details(path, details)
 
@@ -177,4 +181,5 @@ if __name__ == '__main__':
         batch_size=100,
         model_name=args.model_name,
         model_kwargs={},
+        device='cpu'
     )
