@@ -2,14 +2,23 @@ from tailnflows.experiment_utils import get_project_root
 import pandas as pd
 import numpy as np
 import torch
+import os
 
+DATA_PATH = os.environ.get('TAILNFLOWS_DATA', None)
+
+def get_data_path():
+    if DATA_PATH is None:
+        return f'{get_project_root()}/data'
+    else:
+        return DATA_PATH
+    
 def get_return_data(wanted_symbols=None, top_n_symbols=10):
     assert wanted_symbols is not None or top_n_symbols is not None, 'Need to pass either top_n_symbols or wanted_symbols!'
-        
-    target_file = f'{get_project_root()}/data/VIX.csv'
+    
+    target_file = f'{get_data_path()}/VIX.csv'
     vix_data = pd.read_csv(target_file, index_col='Date', parse_dates=True)
     vix_data['Symbol'] = 'VIX'
-    target_file = f'{get_project_root()}/data/sp500_stocks.csv'
+    target_file = f'{get_data_path()}/sp500_stocks.csv'
     data = pd.concat([
         pd.read_csv(target_file, index_col='Date', parse_dates=True),
         vix_data
