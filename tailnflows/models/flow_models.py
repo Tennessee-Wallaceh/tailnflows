@@ -16,19 +16,8 @@ from flowtorch import parameters as ft_parameters
 from flowtorch import distributions as ft_distributions
 
 # custom modules
-from tailnflows.models.masked_autoregressive import (
-    MaskedAutoregressiveTransform, 
-    Flip,
-    Chain,
-    Marginal
-)
-from tailnflows.models.extreme_transformations import (
-    SwitchTransform,
-    SwitchAffineTransform,
-)
+# from tailnflows.models.extreme_transformations import
 from tailnflows.models.base_distribution import TrainableStudentT
-from tailnflows.models.rqs import RQSTransform
-from tailnflows.models.affine import AffineTransform
 
 def initialise_switch_layer(masked_autoreg_transform, dim, value=-10.):
     for _dim in range(dim):

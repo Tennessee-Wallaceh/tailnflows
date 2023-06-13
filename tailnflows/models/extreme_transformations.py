@@ -1,11 +1,16 @@
 import torch
-from torch.nn.functional import softplus
+from torch.nn.functional import softplus, relu
+from nflows.transforms.autoregressive import AutoregressiveTransform
+from nflows.transforms import made as made_module
 
 MAX_TAIL = 5.
 SQRT_2 = torch.sqrt(torch.tensor(2.))
 SQRT_PI = torch.sqrt(torch.tensor(torch.pi))
+MIN_ERFC_INV = torch.tensor(5e-7)
 
 def _erfcinv(x):
+    # with torch.no_grad():
+    #     x = torch.clamp(x, min=MIN_ERFC_INV)
     return -torch.special.ndtri(0.5 * x) / SQRT_2
 
 def _shift_power_transform_and_lad(z, tail_param):
@@ -41,106 +46,51 @@ def _extreme_inverse_and_lad(x, tail_param):
 
     return z, lad
 
-class ExtremeScaleTransform():
-    def __init__(self):
-        self.param_shape = (1, 1)
-    
-    # sampling direction
-    # first apply the tail, then the scale
-    def forward_and_lad(self, z, unc_params):
-        pos_param = softplus(unc_params)
-        tail_param = pos_param[:,0::2]
-        scale_param = pos_param[:,1::2]
-        sign = torch.sign(z)
-        x, lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
-        return sign * x * scale_param, lad.sum(axis=1) + torch.log(scale_param).sum(axis=1)
-    
-    def inverse_and_lad(self, x, unc_params):
-        pos_param = softplus(unc_params)
-        tail_param = pos_param[:,0::2]
-        scale_param = pos_param[:,1::2]
-    
-        x = x / scale_param
-        sign = torch.sign(x)
-        z, lad = _extreme_inverse_and_lad(torch.abs(x), tail_param)
 
-        return sign * z, lad.sum(axis=1) - torch.log(scale_param).sum(axis=1)
+def flip(transform):
+    _inverse = transform._elementwise_inverse
+    transform._elementwise_inverse = transform._elementwise_forward
+    transform._elementwise_forward = _inverse
+    return transform
 
+class MaskedTailAutoregressiveTransform(AutoregressiveTransform):
+    def __init__(
+        self,
+        features,
+        hidden_features,
+        context_features=None,
+        num_blocks=2,
+        use_residual_blocks=True,
+        random_mask=False,
+        activation=relu,
+        dropout_probability=0.0,
+        use_batch_norm=False,
+    ):
+        self.features = features
+        made = made_module.MADE(
+            features=features,
+            hidden_features=hidden_features,
+            context_features=context_features,
+            num_blocks=num_blocks,
+            output_multiplier=self._output_dim_multiplier(),
+            use_residual_blocks=use_residual_blocks,
+            random_mask=random_mask,
+            activation=activation,
+            dropout_probability=dropout_probability,
+            use_batch_norm=use_batch_norm,
+        )
+        self._epsilon = 1e-3
+        super(MaskedTailAutoregressiveTransform, self).__init__(made)
 
-class SwitchScaleTransform():
-    def __init__(self):
-        self.param_shape = (1, 1)
-    
-    # sampling direction
-    # first apply the tail, then the scale
-    def forward_and_lad(self, z, tail_param, scale_param):
-        tail_param = 1e-3 + softplus(tail_param).squeeze()
-        scale_param = 1e-3 + softplus(scale_param).squeeze()
+    def _output_dim_multiplier(self):
+        return 4
 
-        sign = torch.sign(z)
-        heavy_x, heavy_lad = _extreme_transform_and_lad(torch.abs(z), tail_param - 1)
-        light_x, light_lad = _shift_power_transform_and_lad(torch.abs(z), tail_param + 1)
-        x = torch.where(tail_param > 1., heavy_x, light_x)
-        lad = torch.where(tail_param > 1., heavy_lad, light_lad)
-        return sign * x * scale_param, lad.sum(axis=1) + torch.log(scale_param).sum(axis=1)
-    
-    def inverse_and_lad(self, x, tail_param, scale_param):
-        tail_param = 1e-3 + softplus(tail_param).squeeze()
-        scale_param = 1e-3 + softplus(scale_param).squeeze()
-
-        # scale transform
-        x = x / scale_param
-
-        # tail transform
-        sign = torch.sign(x)
-        heavy_z, heavy_lad = _extreme_inverse_and_lad(torch.abs(x), tail_param - 1)
-        light_z, light_lad = _shift_power_inverse_and_lad(torch.abs(x), tail_param + 1)
-        z = torch.where(tail_param > 1., heavy_z, light_z)
-        lad = torch.where(tail_param > 1., heavy_lad, light_lad)
-        
-        return sign * z, lad.sum(axis=1) - torch.log(scale_param).sum(axis=1)
-
-
-class SwitchTransform():
-    def __init__(self):
-        self.param_shape = (1,)
-    
-    # sampling direction
-    # first apply the tail, then the scale
-    def forward_and_lad(self, z, tail_param):
-        tail_param = 1e-3 + softplus(tail_param).squeeze()
-
-        sign = torch.sign(z)
-        heavy_x, heavy_lad = _extreme_transform_and_lad(torch.abs(z), tail_param - 1)
-        light_x, light_lad = _shift_power_transform_and_lad(torch.abs(z), tail_param + 1)
-        x = torch.where(tail_param > 1., heavy_x, light_x)
-        lad = torch.where(tail_param > 1., heavy_lad, light_lad)
-        return sign * x, lad.sum(axis=1)
-    
-    def inverse_and_lad(self, x, tail_param):
-        tail_param = 1e-3 + softplus(tail_param).squeeze()
-
-        # tail transform
-        sign = torch.sign(x)
-        heavy_z, heavy_lad = _extreme_inverse_and_lad(torch.abs(x), tail_param - 1)
-        light_z, light_lad = _shift_power_inverse_and_lad(torch.abs(x), tail_param + 1)
-        z = torch.where(tail_param > 1., heavy_z, light_z)
-        lad = torch.where(tail_param > 1., heavy_lad, light_lad)
-        
-        return sign * z, lad.sum(axis=1)
-
-
-class SwitchAffineTransform():
-    def __init__(self):
-        self.param_shape = (1, 1, 1)
-    
-    # sampling direction
-    # first apply the tail, then the scale
-    def forward_and_lad(self, z, tail_param, scale_param, loc_param):
-        # tail_param = -1. + (MAX_TAIL + 1) * torch.sigmoid(tail_param).squeeze()
-        tail_param = -1. + softplus(tail_param).squeeze()
-        scale_param = 1e-3 + softplus(scale_param).squeeze()
-        shift_param = loc_param.squeeze()
+    def _elementwise_forward(self, z, autoregressive_params):
+        unc_ptail, unc_ntail, unc_scale, shift_param = self._unconstrained_params(autoregressive_params)
+        pos_tail_param =  softplus(unc_ptail) - 1. # (-1, inf)
+        neg_tail_param =  softplus(unc_ntail) - 1. # (-1, inf)
+        scale_param = 1e-2 + softplus(unc_scale)
+        tail_param = torch.where(z > 0, pos_tail_param, neg_tail_param)
 
         sign = torch.sign(z)
         heavy_x, heavy_lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
@@ -149,22 +99,97 @@ class SwitchAffineTransform():
         x = torch.where(tail_param > 0., heavy_x, light_x)
         lad = torch.where(tail_param > 0., heavy_lad, light_lad)
 
-        return sign * x * scale_param + shift_param, lad.sum(axis=1) + torch.log(scale_param).sum(axis=1)
+        return sign * x * scale_param + shift_param, (lad + torch.log(scale_param)).sum(axis=1)
+
+    def _elementwise_inverse(self, x, autoregressive_params):
+        unc_ptail, unc_ntail, unc_scale, shift_param = self._unconstrained_params(autoregressive_params)
+        pos_tail_param =  softplus(unc_ptail) - 1. # (-1, inf)
+        neg_tail_param =  softplus(unc_ntail) - 1. # (-1, inf)
+        scale_param = 1e-2 + softplus(unc_scale)
+        
+        # affine transform
+        x = (x - shift_param) / scale_param
+        tail_param = torch.where(x > 0, pos_tail_param, neg_tail_param)
+
+        # tail transform
+        sign = torch.sign(x)
+        heavy_z, heavy_lad = _extreme_inverse_and_lad(torch.abs(x), torch.abs(tail_param))
+        light_z, light_lad = _shift_power_inverse_and_lad(torch.abs(x), tail_param + 2)
+        z = torch.where(tail_param > 0., heavy_z, light_z)
+        lad = torch.where(tail_param > 0., heavy_lad, light_lad)
+
+        return sign * z, (lad - torch.log(scale_param)).sum(axis=1)
+
+    def _unconstrained_params(self, autoregressive_params):
+        autoregressive_params = autoregressive_params.view(
+            -1, self.features, self._output_dim_multiplier()
+        )
+        return (
+            autoregressive_params[..., 0], 
+            autoregressive_params[..., 1], 
+            autoregressive_params[..., 2],
+            autoregressive_params[..., 3],
+        )
     
-    def inverse_and_lad(self, x, tail_param, scale_param, loc_param):
-        # tail_param = -1. + (MAX_TAIL + 1) * torch.sigmoid(tail_param).squeeze()
-        tail_param = -1. + softplus(tail_param).squeeze()
-        scale_param = 1e-3 + softplus(scale_param).squeeze()
-        shift_param = loc_param.squeeze()
+
+class MaskedExtremeAutoregressiveTransform(AutoregressiveTransform):
+    def __init__(
+        self,
+        features,
+        hidden_features,
+        context_features=None,
+        num_blocks=2,
+        use_residual_blocks=True,
+        random_mask=False,
+        activation=relu,
+        dropout_probability=0.0,
+        use_batch_norm=False,
+    ):
+        self.features = features
+        made = made_module.MADE(
+            features=features,
+            hidden_features=hidden_features,
+            context_features=context_features,
+            num_blocks=num_blocks,
+            output_multiplier=self._output_dim_multiplier(),
+            use_residual_blocks=use_residual_blocks,
+            random_mask=random_mask,
+            activation=activation,
+            dropout_probability=dropout_probability,
+            use_batch_norm=use_batch_norm,
+        )
+        self._epsilon = 1e-3
+        super(MaskedTailAutoregressiveTransform, self).__init__(made)
+
+    def _output_dim_multiplier(self):
+        return 3
+
+    def _elementwise_forward(self, z, autoregressive_params):
+        unc_tail, unc_scale, shift_param = self._unconstrained_params(autoregressive_params)
+        tail_param =  1e-3 + softplus(unc_tail) # (0, inf)
+        scale_param = 1e-2 + softplus(unc_scale)
+
+        sign = torch.sign(z)
+        x, lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
+
+        return sign * x * scale_param + shift_param, (lad + torch.log(scale_param)).sum(axis=1)
+
+    def _elementwise_inverse(self, x, autoregressive_params):
+        unc_tail, unc_scale, shift_param = self._unconstrained_params(autoregressive_params)
+        tail_param =  1e-3 + softplus(unc_tail) # (0, inf)
+        scale_param = 1e-2 + softplus(unc_scale)
 
         # affine transform
         x = (x - shift_param) / scale_param
 
         # tail transform
         sign = torch.sign(x)
-        heavy_z, heavy_lad = _extreme_inverse_and_lad(torch.abs(x), tail_param)
-        light_z, light_lad = _shift_power_inverse_and_lad(torch.abs(x), tail_param + 2)
-        z = torch.where(tail_param > 0., heavy_z, light_z)
-        lad = torch.where(tail_param > 0., heavy_lad, light_lad)
-        
-        return sign * z, lad.sum(axis=1) - torch.log(scale_param).sum(axis=1)
+        z, lad = _extreme_inverse_and_lad(torch.abs(x), torch.abs(tail_param))
+
+        return sign * z, (lad - torch.log(scale_param)).sum(axis=1)
+
+    def _unconstrained_params(self, autoregressive_params):
+        autoregressive_params = autoregressive_params.view(
+            -1, self.features, self._output_dim_multiplier()
+        )
+        return autoregressive_params[..., 0], autoregressive_params[..., 1], autoregressive_params[..., 2]
