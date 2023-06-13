@@ -1,4 +1,4 @@
-from tailnflows.experiment_utils import get_project_root
+from tailnflows.experiments.experiment_utils import get_project_root
 import pandas as pd
 import numpy as np
 import torch

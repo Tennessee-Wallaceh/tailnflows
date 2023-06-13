@@ -8,7 +8,7 @@ from torch.optim import Adam
 
 # our modules
 from tailnflows.models.flow_models import get_model
-from tailnflows.experiment_utils import get_project_root, new_experiment, write_experiment_details, save_model
+from tailnflows.experiments.experiment_utils import get_project_root, new_experiment, write_experiment_details, save_model
 from tailnflows.metrics import ess, marginal_likelihood
 from tailnflows.targets import targets
 

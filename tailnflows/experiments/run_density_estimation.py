@@ -10,7 +10,7 @@ from torch.optim import Adam
 # our modules
 from tailnflows.models.density_estimation import get_model
 from tailnflows.data import data_sources
-from tailnflows.experiment_utils import get_project_root, new_experiment, write_experiment_details, save_model
+from tailnflows.experiments.experiment_utils import get_project_root, new_experiment, write_experiment_details, save_model
 
 precision_types = {
     'float64': torch.float64,
