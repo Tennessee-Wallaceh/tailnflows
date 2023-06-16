@@ -86,6 +86,7 @@ class MaskedTailAutoregressiveTransform(AutoregressiveTransform):
         return 4
 
     def _elementwise_forward(self, z, autoregressive_params):
+        """light -> heavy"""
         unc_ptail, unc_ntail, unc_scale, shift_param = self._unconstrained_params(autoregressive_params)
         pos_tail_param =  softplus(unc_ptail) - 1. # (-1, inf)
         neg_tail_param =  softplus(unc_ntail) - 1. # (-1, inf)
@@ -102,6 +103,7 @@ class MaskedTailAutoregressiveTransform(AutoregressiveTransform):
         return sign * x * scale_param + shift_param, (lad + torch.log(scale_param)).sum(axis=1)
 
     def _elementwise_inverse(self, x, autoregressive_params):
+        """heavy -> light"""
         unc_ptail, unc_ntail, unc_scale, shift_param = self._unconstrained_params(autoregressive_params)
         pos_tail_param =  softplus(unc_ptail) - 1. # (-1, inf)
         neg_tail_param =  softplus(unc_ntail) - 1. # (-1, inf)
@@ -159,7 +161,7 @@ class MaskedExtremeAutoregressiveTransform(AutoregressiveTransform):
             use_batch_norm=use_batch_norm,
         )
         self._epsilon = 1e-3
-        super(MaskedTailAutoregressiveTransform, self).__init__(made)
+        super(MaskedExtremeAutoregressiveTransform, self).__init__(made)
 
     def _output_dim_multiplier(self):
         return 3

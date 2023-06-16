@@ -6,7 +6,14 @@ import torch
 def get_data_path():
     return f'{get_project_root()}/data'
 
-def get_return_data(dtype, wanted_symbols=None, top_n_symbols=10):
+def get_return_data(
+        dtype, 
+        wanted_symbols=None, 
+        top_n_symbols=10, 
+        standardise=False, 
+        val_prop=0.2, 
+        tst_prop=0.4
+):
     assert wanted_symbols is not None or top_n_symbols is not None, 'Need to pass either top_n_symbols or wanted_symbols!'
     torch.set_default_dtype(dtype)
 
@@ -18,7 +25,7 @@ def get_return_data(dtype, wanted_symbols=None, top_n_symbols=10):
         pd.read_csv(target_file, index_col='Date', parse_dates=True),
         vix_data
     ])
-    data = data.loc['2015-1-1':]
+    # data = data.loc['2014-1-1':]
 
     if wanted_symbols is None and top_n_symbols is None:
         wanted_symbols = [
@@ -63,21 +70,22 @@ def get_return_data(dtype, wanted_symbols=None, top_n_symbols=10):
     dim = len(wanted_symbols)
 
     n = x.shape[0]
-    n_val = int(0.2 * n)
-    n_tst = int(0.1 * n)
+    n_val = int(val_prop * n)
+    n_tst = int(tst_prop * n)
     n_trn = n - n_val - n_tst
 
     x_trn, x_val, x_tst = torch.split(x, [n_trn, n_val, n_tst])
 
     # standardise
-    trn_mean = x_trn.mean(axis=0)
-    trn_std = x_trn.std(axis=0)
+    if standardise:
+        trn_mean = x_trn.mean(axis=0)
+        trn_std = x_trn.std(axis=0)
 
-    x_trn = (x_trn - trn_mean) / trn_std
-    x_val = (x_val - trn_mean) / trn_std
-    x_tst = (x_tst - trn_mean) / trn_std
+        x_trn = (x_trn - trn_mean) / trn_std
+        x_val = (x_val - trn_mean) / trn_std
+        x_tst = (x_tst - trn_mean) / trn_std
 
-    return x_trn, x_val, x_tst, dim
+    return x_trn, x_val, x_tst, dim, {'used_symbols': wanted_symbols}
 
 data_sources = {
     'financial_returns': get_return_data

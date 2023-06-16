@@ -4,9 +4,13 @@ import torch
 import pickle
 import fnmatch
 import pandas as pd
+import tqdm
 
+from tailnflows.models.density_estimation import get_model as get_de_model
 from tailnflows.models.flow_models import get_model
 from tailnflows.targets import targets
+from tailnflows.data import data_sources
+from tailnflows.utils import get_project_root
 
 def new_experiment(path):
     if not os.path.exists(path):
@@ -40,25 +44,39 @@ def load_experiment_details(path):
 def save_model(path, model):
     torch.save(model.state_dict(), f'{path}/trained.model')
 
-def load_model(details):
-    path = details['path']
-    sample_and_log_prob, model = get_model(details['model'], details['dim'])
-    model.load_state_dict(torch.load(f'{path}/trained.model'))
-    return sample_and_log_prob, model
+def load_model(details, vi=True):
+    if vi:
+        path = details['path']
+        sample_and_log_prob, model = get_model(details['model'], details['dim'])
+        model.load_state_dict(torch.load(f'{path}/trained.model'))
+        return sample_and_log_prob, model
+    else:
+        path = details['disk_path']
+        model = get_de_model(torch.float64, details['model'], details['dim'], details['model_kwargs'])
+        model.load_state_dict(torch.load(f'{path}/trained.model', map_location=torch.device('cpu') ))
+        return model
 
-def load_experiment_data():
-    path = f'{get_project_root()}/experiment_output'
+def load_experiment_data(target_dir):
+    path = f'{get_project_root()}/experiment_output/{target_dir}'
     experiments = [
-        load_experiment_details(dirpath)
+        {**load_experiment_details(dirpath), 'disk_path': dirpath}
         for dirpath, _, files in os.walk(path)
         for f in fnmatch.filter(files, 'training_data.npy') # ensure training complete
     ]
     experiment_data = pd.DataFrame(experiments)
-
+    experiment_data = experiment_data[experiment_data['dim'] < 100]
     models = {}
-    for ix, details in experiment_data.iterrows():
-        _, dim, _ = targets[details['target']](details['target_kwargs'])
-        details['dim'] = dim
-        models[ix] = load_model(details)
+    for ix, details in tqdm.tqdm(list(experiment_data.iterrows())):
+        if details['target'] in targets:
+            _, dim, _ = targets[details['target']](details['target_kwargs'])
+            details['dim'] = dim
+            models[ix] = load_model(details)
+            
+        elif details['target'] in data_sources:
+            _, _, _, dim = data_sources[details['target']](torch.float64, **details['target_kwargs'])
+            details['dim'] = dim
+            models[ix] = load_model(details, vi=False)
+
+        
 
     return experiment_data, models
