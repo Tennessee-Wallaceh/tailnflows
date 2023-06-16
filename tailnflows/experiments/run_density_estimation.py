@@ -40,7 +40,7 @@ def run_experiment(
     torch.set_default_dtype(dtype)
 
     # setup target data
-    x_trn, x_val, x_tst, dim, _ = data_sources[target_name](dtype, **target_kwargs)
+    x_trn, x_val, x_tst, dim, _ = data_sources[target_name](dtype, standardise=True, **target_kwargs)
     train_loader = torch.utils.data.DataLoader(x_trn.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
     val_loader = torch.utils.data.DataLoader(x_val.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(x_tst.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
