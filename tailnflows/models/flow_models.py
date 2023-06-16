@@ -11,9 +11,9 @@ from nflows.distributions.normal import StandardNormal
 from nflows.flows import Flow
 
 # flowtorch dependencies
-from flowtorch import bijectors as ft_bijectors
-from flowtorch import parameters as ft_parameters
-from flowtorch import distributions as ft_distributions
+# from flowtorch import bijectors as ft_bijectors
+# from flowtorch import parameters as ft_parameters
+# from flowtorch import distributions as ft_distributions
 
 # custom modules
 # from tailnflows.models.extreme_transformations import
@@ -114,51 +114,51 @@ def get_model(model_name, dim, model_kwargs={}):
             return x, log_prob
         
 
-    elif model_name == 'ADVI':
-        transformation = ft_bijectors.AffineAutoregressive(
-            ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10])
-        )
-        base_dist = torch.distributions.Independent(
-            torch.distributions.Normal(torch.zeros(dim), torch.ones(dim)), 
-            1
-        )
-        model = ft_distributions.Flow(base_dist, transformation)
+    # elif model_name == 'ADVI':
+    #     transformation = ft_bijectors.AffineAutoregressive(
+    #         ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10])
+    #     )
+    #     base_dist = torch.distributions.Independent(
+    #         torch.distributions.Normal(torch.zeros(dim), torch.ones(dim)), 
+    #         1
+    #     )
+    #     model = ft_distributions.Flow(base_dist, transformation)
 
-        def sample_and_log_prob(n):
-            samples = model.rsample((n,))
-            log_q = model.log_prob(samples)
-            return samples, log_q
+    #     def sample_and_log_prob(n):
+    #         samples = model.rsample((n,))
+    #         log_q = model.log_prob(samples)
+    #         return samples, log_q
         
-    elif model_name == 'ATAF_no_spline':
-        base_dist = TrainableStudentT(dim, init=10.)
-        transformation = ft_bijectors.AffineAutoregressive(
-            ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10])
-        )
-        model = ft_distributions.Flow(base_dist, transformation)
-        def sample_and_log_prob(n):
-            samples = model.rsample((n,))
-            log_q = model.log_prob(samples)
-            return samples, log_q
+    # elif model_name == 'ATAF_no_spline':
+    #     base_dist = TrainableStudentT(dim, init=10.)
+    #     transformation = ft_bijectors.AffineAutoregressive(
+    #         ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10])
+    #     )
+    #     model = ft_distributions.Flow(base_dist, transformation)
+    #     def sample_and_log_prob(n):
+    #         samples = model.rsample((n,))
+    #         log_q = model.log_prob(samples)
+    #         return samples, log_q
         
-    elif model_name == 'ATAF':
-        base_dist = TrainableStudentT(dim, init=10.) # init from FTVI code
-        bijections =(
-            ft_bijectors.SplineAutoregressive(
-                ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10]),
-                bound=5.,
-                count_bins=8,
-            ),
-            ft_bijectors.AffineAutoregressive(
-                ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10])
-            )
-        )
-        transformation = ft_bijectors.Compose(bijections)
-        model = ft_distributions.Flow(base_dist, transformation)
+    # elif model_name == 'ATAF':
+    #     base_dist = TrainableStudentT(dim, init=10.) # init from FTVI code
+    #     bijections =(
+    #         ft_bijectors.SplineAutoregressive(
+    #             ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10]),
+    #             bound=5.,
+    #             count_bins=8,
+    #         ),
+    #         ft_bijectors.AffineAutoregressive(
+    #             ft_parameters.DenseAutoregressive(hidden_dims=[dim + 10])
+    #         )
+    #     )
+    #     transformation = ft_bijectors.Compose(bijections)
+    #     model = ft_distributions.Flow(base_dist, transformation)
 
-        def sample_and_log_prob(n):
-            samples = model.rsample((n,))
-            log_q = model.log_prob(samples)
-            return samples, log_q   
+    #     def sample_and_log_prob(n):
+    #         samples = model.rsample((n,))
+    #         log_q = model.log_prob(samples)
+    #         return samples, log_q   
         
     else:
         raise ValueError(f'Invalid model name')
