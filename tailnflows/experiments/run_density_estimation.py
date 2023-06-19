@@ -35,12 +35,13 @@ def run_experiment(
     
     # config
     torch.manual_seed(seed)
+    data_seed = seed + 1000 # just start as shift of global seed
     torch.set_default_device(device)
     dtype = precision_types[precision]
     torch.set_default_dtype(dtype)
 
     # setup target data
-    x_trn, x_val, x_tst, dim, _ = data_sources[target_name](dtype, standardise=True, **target_kwargs)
+    x_trn, x_val, x_tst, dim, _ = data_sources[target_name](dtype, data_seed, standardise=True, **target_kwargs)
     train_loader = torch.utils.data.DataLoader(x_trn.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
     val_loader = torch.utils.data.DataLoader(x_val.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(x_tst.to(device), generator=torch.Generator(device=device), batch_size=batch_size, shuffle=True)
@@ -99,6 +100,7 @@ def run_experiment(
     train_losses = []
     val_losses = []
     best_val_loss = None
+    best_val_epoch = None
     # torch.autograd.set_detect_anomaly(True)
     for epoch in loop:  # loop over the dataset multiple times
         # train
@@ -126,24 +128,28 @@ def run_experiment(
 
         if best_val_loss is None or validation_loss < best_val_loss:
             best_val_loss = validation_loss
+            best_val_epoch = epoch
             save_model(path, model) # save the best model
 
+            # record test loss for best model
+            test_loss = 0
+            for inputs in test_loader:
+                loss = -model.log_prob(inputs).mean()
+                test_loss += loss
+            test_loss = test_loss / len(test_loader)
+        
         loop.set_postfix({
             'val': f'{validation_loss:.2f}',
             'trn': f'{train_loss:.2f}',
+            '*tst': f'{test_loss:.2f}',
         })
-
-    # test loss
-    test_loss = 0
-    for inputs in test_loader:
-        loss = -model.log_prob(inputs).mean()
-        test_loss += loss
-    test_loss = test_loss / len(test_loader)
 
     # save training data as np arrays
     training_data = {
         'train_losses': np.array([loss.detach().cpu().numpy() for loss in train_losses]),
         'val_losses': np.array([loss.detach().cpu().numpy() for loss in val_losses]),
+        'best_val_loss': best_val_loss.detach().cpu().numpy(),
+        'best_val_epoch': best_val_epoch,
         'test_loss': test_loss.detach().cpu().numpy(),
         'iterations': np.arange(num_epochs),
     }
@@ -163,22 +169,20 @@ if __name__ == '__main__':
     parser.add_argument('-seed', type=int, action='store', default=0)
     parser.add_argument('-model_name', type=str, action='store', default='TTF')
     parser.add_argument('-target_config', type=str, action='store', default='top_100')
+    parser.add_argument('-num_epochs', type=int, action='store', default=100)
+    parser.add_argument('-lr', type=float, action='store', default=1e-3)
 
     args = parser.parse_args()
 
     target_kwargs = target_configs[args.target_config]
     
-    # fixed config
-    lr = 1e-3
-    num_epochs = 100
-
     run_experiment(
         seed=args.seed, 
         target_name='financial_returns',
         target_kwargs=target_kwargs,
         grad_clip=False,
-        lr=lr, 
-        num_epochs=num_epochs, 
+        lr=args.lr, 
+        num_epochs=args.num_epochs, 
         batch_size=500,
         model_name=args.model_name,
         model_kwargs={},

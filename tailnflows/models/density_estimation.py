@@ -9,18 +9,13 @@ from nflows.transforms.autoregressive import (
 )
 from nflows.transforms.base import CompositeTransform, InverseTransform
 
+# custom modules
 from tailnflows.models.extreme_transformations import (
     MaskedTailAutoregressiveTransform, 
     flip,
-    MaskedExtremeAutoregressiveTransform
+    MaskedExtremeAutoregressiveTransform,
+    TailMarginalTransform
 )
-
-
-# custom modules
-# from tailnflows.models.extreme_transformations import (
-#     SwitchTransform,
-#     SwitchAffineTransform,
-# )
 from tailnflows.models.base_distribution import TrainableStudentT
 
 def get_model(dtype, model_name, dim, model_kwargs={}):
@@ -35,7 +30,7 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
 
         base_distribution = StandardNormal([dim])
         transform = CompositeTransform([
-            # element wise fcn flip, so heavy->light becomes forward transform
+            # element wise fcn flip, so heavy->light becomes forward (to noise in nflows) transform
             flip(MaskedTailAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2)),
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim, 
@@ -47,6 +42,17 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
             ),
         ])
 
+        if tail_init is not None:
+            for _dim in range(dim):
+                torch.nn.init.constant_(
+                    transform._transforms[0].autoregressive_net.final_layer.bias[_dim * 4], 
+                    tail_init
+                )
+                torch.nn.init.constant_(
+                    transform._transforms[0].autoregressive_net.final_layer.bias[_dim * 4 + 1],
+                    tail_init
+                )
+            
         model = Flow(distribution=base_distribution, transform=transform)
 
     elif model_name == 'EXFLOW':
@@ -82,7 +88,8 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
 
         base_distribution = StandardNormal([dim])
         transform = CompositeTransform([
-            flip(MaskedTailAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2)),
+            flip(TailMarginalTransform(features=dim)),
+            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim, 
                 hidden_features=hidden_layer_size, 
@@ -104,7 +111,6 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
 
         base_distribution = StandardNormal([dim])
         transform = CompositeTransform([
-            
             InverseTransform(MaskedTailAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2)),
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim, 

@@ -64,19 +64,12 @@ def load_experiment_data(target_dir):
         for f in fnmatch.filter(files, 'training_data.npy') # ensure training complete
     ]
     experiment_data = pd.DataFrame(experiments)
-    experiment_data = experiment_data[experiment_data['dim'] < 100]
     models = {}
     for ix, details in tqdm.tqdm(list(experiment_data.iterrows())):
         if details['target'] in targets:
-            _, dim, _ = targets[details['target']](details['target_kwargs'])
-            details['dim'] = dim
             models[ix] = load_model(details)
-            
         elif details['target'] in data_sources:
-            _, _, _, dim = data_sources[details['target']](torch.float64, **details['target_kwargs'])
-            details['dim'] = dim
             models[ix] = load_model(details, vi=False)
-
         
 
     return experiment_data, models
