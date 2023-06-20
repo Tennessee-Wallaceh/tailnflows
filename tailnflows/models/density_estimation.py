@@ -29,10 +29,14 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         num_bins = model_kwargs.get('num_bins', 8)
         tail_init = model_kwargs.get('tail_init', None)
         rotation = model_kwargs.get('rotation', False)
+        num_tail_layers = model_kwargs.get('num_tail_layers', 1)
         
         base_distribution = StandardNormal([dim]) 
         # element wise fcn flip, so heavy->light becomes forward (to noise in nflows) transform
-        transforms = [flip(MaskedTailAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2))]
+        transforms = [
+            flip(MaskedTailAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2))
+            for _ in range(num_tail_layers)
+        ]
         if rotation:
             transforms.append(LULinear(features=dim))
         transforms.append(
@@ -78,7 +82,7 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
                 num_blocks=num_hidden_layers, 
                 num_bins=num_bins,
                 tails='linear', 
-                tail_bound=tail_bound
+                tail_bound=tail_bound,
             ),
         ])
 
@@ -93,7 +97,10 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         rotation = model_kwargs.get('rotation', False)
         
         base_distribution = StandardNormal([dim]) 
-        transforms = [flip(TailMarginalTransform(features=dim))]
+        transforms = [
+            flip(TailMarginalTransform(features=dim)),
+            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
+        ]
         if rotation:
             transforms.append(LULinear(features=dim))
         transforms.append(
@@ -103,7 +110,7 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
                 num_blocks=num_hidden_layers, 
                 num_bins=num_bins,
                 tails='linear', 
-                tail_bound=tail_bound
+                tail_bound=tail_bound,
             )
         )
         transform = CompositeTransform(transforms)
@@ -118,7 +125,11 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         rotation = model_kwargs.get('rotation', False)
         
         base_distribution = StandardNormal([dim]) 
-        transforms = [InverseTransform(MaskedTailAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2))]
+        transforms = [InverseTransform(MaskedTailAutoregressiveTransform(
+            features=dim, 
+            hidden_features=dim  * 2, 
+            num_blocks=2,
+        ))]
         if rotation:
             transforms.append(LULinear(features=dim))
         transforms.append(
@@ -128,7 +139,7 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
                 num_blocks=num_hidden_layers, 
                 num_bins=num_bins,
                 tails='linear', 
-                tail_bound=tail_bound
+                tail_bound=tail_bound,
             )
         )
         transform = CompositeTransform(transforms)
@@ -152,7 +163,7 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
                 num_blocks=num_hidden_layers, 
                 num_bins=num_bins,
                 tails='linear', 
-                tail_bound=tail_bound
+                tail_bound=tail_bound,
             )
         )
         transform = CompositeTransform(transforms)
@@ -189,16 +200,16 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
 
         base_dist = TrainableStudentT(dim, init=tail_init) 
         transform = CompositeTransform([
-            LULinear(features=dim),
-            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
+            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=num_hidden_layers),
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim, 
                 hidden_features=hidden_layer_size, 
                 num_blocks=num_hidden_layers, 
                 num_bins=num_bins,
                 tails='linear', 
-                tail_bound=tail_bound
-            )
+                tail_bound=tail_bound,
+            ),
+            LULinear(features=dim),
         ])
 
         model = Flow(distribution=base_dist, transform=transform)
@@ -206,14 +217,11 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
     elif model_name == 'nflow_ADVI':
         hidden_layer_size = model_kwargs.get('hidden_layer_size', dim  * 2)
         num_hidden_layers = model_kwargs.get('num_hidden_layers', 2)
-        tail_bound = model_kwargs.get('tail_bound', 1.)
-        num_bins = model_kwargs.get('num_bins', 8)
-        tail_init = model_kwargs.get('tail_init', 10.) # default init from FTVI code
 
-        base_dist = TrainableStudentT(dim, init=tail_init) 
+        base_dist = StandardNormal([dim]) 
         transform = CompositeTransform([
-            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
-            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
+            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=num_hidden_layers),
+            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=num_hidden_layers),
         ])
 
         model = Flow(distribution=base_dist, transform=transform)
