@@ -70,12 +70,17 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         tail_bound = model_kwargs.get('tail_bound', 1.)
         num_bins = model_kwargs.get('num_bins', 8)
         tail_init = model_kwargs.get('tail_init', None)
+        rotation = model_kwargs.get('rotation', False)
 
         base_distribution = StandardNormal([dim])
-        transform = CompositeTransform([
+        transforms = [
             # element wise fcn flip, so heavy->light becomes forward transform
             # always lightens, will push subgaussian onto RQS
-            flip(MaskedExtremeAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2)),
+            MaskedExtremeAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
+        ]
+        if rotation:
+            transforms.append(LULinear(features=dim))
+        transforms.append(
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim, 
                 hidden_features=hidden_layer_size, 
@@ -83,8 +88,8 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
                 num_bins=num_bins,
                 tails='linear', 
                 tail_bound=tail_bound,
-            ),
-        ])
+            )
+        )
 
         model = Flow(distribution=base_distribution, transform=transform)
     

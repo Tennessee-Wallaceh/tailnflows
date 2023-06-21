@@ -56,14 +56,21 @@ def load_model(details, vi=True):
         model.load_state_dict(torch.load(f'{path}/trained.model', map_location=torch.device('cpu') ))
         return model
 
-def load_experiment_data(target_dir):
+def load_experiment_data(target_dir, load_models=False, filter=None):
     path = f'{get_project_root()}/experiment_output/{target_dir}'
     experiments = [
         {**load_experiment_details(dirpath), 'disk_path': dirpath}
         for dirpath, _, files in os.walk(path)
         for f in fnmatch.filter(files, 'training_data.npy') # ensure training complete
     ]
+    if filter is not None:
+        experiments = [exp for exp in experiments if filter(exp)]
+
     experiment_data = pd.DataFrame(experiments)
+
+    if not load_model:
+        return experiment_data, None
+    
     models = {}
     for ix, details in tqdm.tqdm(list(experiment_data.iterrows())):
         if details['target'] in targets:
