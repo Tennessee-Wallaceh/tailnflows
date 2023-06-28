@@ -68,15 +68,18 @@ def load_experiment_data(target_dir, load_models=False, filter=None):
 
     experiment_data = pd.DataFrame(experiments)
 
-    if not load_model:
-        return experiment_data, None
+    if not load_models:
+        return experiment_data, None, []
     
     models = {}
+    failed = [] # usually due to version mismatch
     for ix, details in tqdm.tqdm(list(experiment_data.iterrows())):
         if details['target'] in targets:
             models[ix] = load_model(details)
         elif details['target'] in data_sources:
-            models[ix] = load_model(details, vi=False)
-        
+            try:
+                models[ix] = load_model(details, vi=False)
+            except:
+                failed.append(details)
 
-    return experiment_data, models
+    return experiment_data, models, failed

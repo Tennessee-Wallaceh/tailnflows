@@ -141,7 +141,8 @@ def run_experiment(
         loop.set_postfix({
             'val': f'{validation_loss:.2f}',
             'trn': f'{train_loss:.2f}',
-            '*tst': f'{test_loss:.2f}',
+            '*val': f'{best_val_loss:.2f}',
+            '*epoch': f'{int(best_val_epoch)}',
         })
 
     # save training data as np arrays

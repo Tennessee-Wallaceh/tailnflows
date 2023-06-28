@@ -31,7 +31,8 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         rotation = model_kwargs.get('rotation', True)
         num_tail_layers = model_kwargs.get('num_tail_layers', 1)
         
-        base_distribution = StandardNormal([dim]) 
+        base_distribution = StandardNormal([dim])
+
         # element wise fcn flip, so heavy->light becomes forward (to noise in nflows) transform
         transforms = [
             flip(MaskedTailAutoregressiveTransform(features=dim, hidden_features=dim  * 2, num_blocks=2))
