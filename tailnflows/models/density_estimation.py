@@ -1,3 +1,4 @@
+# type: ignore
 import torch
 
 # nflows dependencies
@@ -15,11 +16,12 @@ from tailnflows.models.extreme_transformations import (
     MaskedTailAutoregressiveTransform, 
     flip,
     MaskedExtremeAutoregressiveTransform,
-    TailMarginalTransform
+    TailMarginalTransform,
+    EXMarginalTransform,
 )
 from tailnflows.models.base_distribution import TrainableStudentT
 
-def get_model(dtype, model_name, dim, model_kwargs={}):
+def get_model(dtype, model_name: str, dim: int, model_kwargs: dict[str, int]={}):
     torch.set_default_dtype(dtype)
 
     if model_name == 'TTF':
@@ -66,7 +68,7 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         model = Flow(distribution=base_distribution, transform=transform)
 
     elif model_name == 'EXFLOW':
-        hidden_layer_size = model_kwargs.get('hidden_layer_size', dim * 2)
+        hidden_layer_size = model_kwargs.get('hidden_layer_size', 2 * dim)
         num_hidden_layers = model_kwargs.get('num_hidden_layers', 2)
         tail_bound = model_kwargs.get('tail_bound', 2.5)
         num_bins = model_kwargs.get('num_bins', 8)
@@ -104,6 +106,34 @@ def get_model(dtype, model_name, dim, model_kwargs={}):
         base_distribution = StandardNormal([dim]) 
         transforms = [
             flip(TailMarginalTransform(features=dim)),
+            MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
+        ]
+        if rotation:
+            transforms.append(LULinear(features=dim))
+        transforms.append(
+            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
+                features=dim, 
+                hidden_features=hidden_layer_size, 
+                num_blocks=num_hidden_layers, 
+                num_bins=num_bins,
+                tails='linear', 
+                tail_bound=tail_bound,
+            )
+        )
+        transform = CompositeTransform(transforms)
+        model = Flow(distribution=base_distribution, transform=transform)
+
+    elif model_name == 'EXF_marginal':
+        hidden_layer_size = model_kwargs.get('hidden_layer_size', dim  * 2)
+        num_hidden_layers = model_kwargs.get('num_hidden_layers', 2)
+        tail_bound = model_kwargs.get('tail_bound', 2.5)
+        num_bins = model_kwargs.get('num_bins', 8)
+        tail_init = model_kwargs.get('tail_init', None)
+        rotation = model_kwargs.get('rotation', True)
+        
+        base_distribution = StandardNormal([dim]) 
+        transforms = [
+            flip(EXMarginalTransform(features=dim)),
             MaskedAffineAutoregressiveTransform(features=dim, hidden_features=dim * 2, num_blocks=2),
         ]
         if rotation:

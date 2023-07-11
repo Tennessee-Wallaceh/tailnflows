@@ -22,7 +22,7 @@ def get_return_data(
         standardise=False, 
         val_prop=0.2, 
         tst_prop=0.4,
-        test_future=True,
+        test_future=False,
 ):
     assert wanted_symbols is not None or top_n_symbols is not None, 'Need to pass either top_n_symbols or wanted_symbols!'
     torch.set_default_dtype(dtype)
