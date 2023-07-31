@@ -97,16 +97,7 @@ def eval_loss(model, data_loader):
         loss = loss / len(data_loader)
     return loss
 
-def run_train(train_config, model, trn_data, val_data):
-    train_loader = torch.utils.data.DataLoader(trn_data, batch_size=train_config['batch_size'], shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_data, batch_size=train_config['batch_size'])
-
-    # preconfigure
-    if train_config['preconfigure'] != '':
-        model = preconfigure_model(model, train_config['preconfigure'], torch.concat([trn_data.data, val_data.data]))
-
-    model = model.to(trn_data.data.dtype) # ensure model is correct dtype
-
+def run_train(train_config, model, train_loader, val_loader):
     # optimizer
     named_params = dict(model.named_parameters())
     optimizer = Adam(
@@ -220,11 +211,19 @@ def run_experiment(
     trn_data = data_sources[target_name](dtype, device, data_seed, data_use='train', **target_kwargs)
     val_data = data_sources[target_name](dtype, device, data_seed, data_use='validate', **target_kwargs)
     tst_data = data_sources[target_name](dtype, device, data_seed, data_use='test', **target_kwargs)
-    test_loader = torch.utils.data.DataLoader(tst_data, batch_size=100)
+    train_loader = torch.utils.data.DataLoader(trn_data, batch_size=train_config['batch_size'], shuffle=True,  generator=torch.Generator(device=device))
+    val_loader = torch.utils.data.DataLoader(val_data, batch_size=train_config['batch_size'],  generator=torch.Generator(device=device))
+    test_loader = torch.utils.data.DataLoader(tst_data, batch_size=100, generator=torch.Generator(device=device))
 
     # setup model
     model = get_model(ModelName[model_name], trn_data.dim, model_kwargs).to(device).to(dtype)
     
+    # preconfigure model
+    if train_config['preconfigure'] != '':
+        model = preconfigure_model(model, train_config['preconfigure'], torch.concat([trn_data.data, val_data.data]))
+
+    model = model.to(dtype).to(device) # ensure model is correct dtype
+
     # record experiment details
     if subdirectory is None:
         base_path = f'{get_project_root()}/experiment_output/{target_name}'
@@ -253,8 +252,8 @@ def run_experiment(
     _train_fcn = lambda train_config: run_train(
         train_config, 
         model=model,
-        trn_data=trn_data, 
-        val_data=val_data
+        train_loader=train_loader, 
+        val_loader=val_loader
     )
 
     # run fits
@@ -390,7 +389,7 @@ def run_preconfigured():
             run_experiment(
                 seed=seed, 
                 target_name='noise_dim',
-                target_kwargs={'d_nuisance': 6},
+                target_kwargs={'d_nuisance': 2},
                 train_config=tc,
                 model_name=model,
                 model_kwargs=model_kwargs,
