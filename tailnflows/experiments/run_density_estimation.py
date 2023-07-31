@@ -378,7 +378,7 @@ train_configs = {
 
 def run_preconfigured():
     seed_set = range(10, 100, 10)
-    # seed_set = [0]
+    seed_set = [0]
     for seed in seed_set:
         model_specs = [
             ('mTAF', {'num_layers': 1, 'tail_bound': 3.}, 'mtaf'),
@@ -387,11 +387,13 @@ def run_preconfigured():
             ('EXF_m', {'tail_bound': 3.}, 'dextreme'),
         ]
         for model, model_kwargs, tconfig in model_specs:
+            tc = train_configs[tconfig]
+            tc['num_epochs'] = 10
             run_experiment(
                 seed=seed, 
                 target_name='noise_dim',
                 target_kwargs={'d_nuisance': 6},
-                train_config=train_configs[tconfig],
+                train_config=tc,
                 model_name=model,
                 model_kwargs=model_kwargs,
                 device='cpu',

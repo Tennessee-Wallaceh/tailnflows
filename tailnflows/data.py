@@ -9,9 +9,7 @@ import torchvision.transforms as transforms
 from torch.utils.data import Dataset
 from typing import Literal
 from torch.nn.functional import softplus
-from tailnflows.utils import MarginalTailAdaptiveFlowImport
-with MarginalTailAdaptiveFlowImport():
-    from synthetic_experiments.data_generators import copula_generator
+from marginal_tail_adaptive_flows.synthetic_experiments.data_generators import copula_generator
 
 def get_data_path():
     return f'{get_project_root()}/data'

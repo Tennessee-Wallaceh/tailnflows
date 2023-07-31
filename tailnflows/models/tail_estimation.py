@@ -3,11 +3,7 @@ import warnings
 import numpy as np
 import os, sys
 import matplotlib.pyplot as plt
-
-from tailnflows.utils import MarginalTailAdaptiveFlowImport
-
-with MarginalTailAdaptiveFlowImport():
-    from mutils.tail_estimation import make_plots
+from marginal_tail_adaptive_flows.utils.tail_estimation import make_plots
 
 class HiddenPrints:
     def __enter__(self):

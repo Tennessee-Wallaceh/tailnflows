@@ -10,9 +10,7 @@ from nflows.transforms import Permutation
 from nflows.transforms.base import CompositeTransform
 
 from tailnflows.models.base_distribution import TrainableStudentT, NormalStudentTJoint
-from tailnflows.utils import MarginalTailAdaptiveFlowImport
-with MarginalTailAdaptiveFlowImport():
-    from mutils.tail_permutation import TailRandomPermutation, TailLU
+from marginal_tail_adaptive_flows.utils.tail_permutation import TailRandomPermutation, TailLU
 
 def _get_intial_permutation(degrees_of_freedom):
     # returns a permutation such that the light dimensions precede heavy ones
