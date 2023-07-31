@@ -2,6 +2,9 @@ import torch
 import numpy as np
 from nflows.transforms.base import Transform
 
+def inv_sftplus(x):
+    return x + torch.log(-torch.expm1(-x))
+
 class Marginal(Transform):
     def __init__(self, dim, transform):
         super().__init__()

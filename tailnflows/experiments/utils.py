@@ -52,7 +52,7 @@ def load_model(details, vi=True):
         return sample_and_log_prob, model
     else:
         path = details['disk_path']
-        model = get_de_model(torch.float64, details['model'], details['dim'], details['model_kwargs'])
+        model = get_de_model(torch.float64, details['model'], int(details['dim']), details['model_kwargs'])
         model.load_state_dict(torch.load(f'{path}/trained.model', map_location=torch.device('cpu') ))
         return model
 
