@@ -15,7 +15,7 @@ class MarginalTailAdaptiveFlowImport():
     https://github.com/MikeLasz/marginalTailAdaptiveFlow/
     """
     def __init__(self):
-        self.path = f'{get_project_root()}/../marginalTailAdaptiveFlow' # must reference local repo
+        self.path = f'{get_project_root()}/dependencies/marginalTailAdaptiveFlow' # must reference local repo
 
     def __enter__(self):
         sys.path.insert(0, self.path)

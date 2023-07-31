@@ -1,0 +1,3 @@
+[submodule "dependencies/marginalTailAdaptiveFlow"]
+	path = dependencies/marginalTailAdaptiveFlow
+	url = git@github.com:Tennessee-Wallaceh/marginalTailAdaptiveFlow.git
