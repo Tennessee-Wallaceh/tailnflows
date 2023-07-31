@@ -1,4 +1,0 @@
-[submodule "dependencies/marginalTailAdaptiveFlow"]
-	path = dependencies/marginalTailAdaptiveFlow
-	url = https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow
-    branch = tweaks

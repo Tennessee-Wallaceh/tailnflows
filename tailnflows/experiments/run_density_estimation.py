@@ -214,9 +214,7 @@ def run_experiment(
     # config
     torch.manual_seed(seed)
     data_seed = seed + 1000 # just start as shift of global seed
-    torch.set_default_device(device)
     dtype = precision_types[precision]
-    torch.set_default_dtype(dtype)
 
     # setup target data
     trn_data = data_sources[target_name](dtype, device, data_seed, data_use='train', **target_kwargs)
