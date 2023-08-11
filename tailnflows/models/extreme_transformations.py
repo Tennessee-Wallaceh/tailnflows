@@ -461,5 +461,3 @@ class Marginal(Transform):
             xs.append(x)
             lad += _lad
         return torch.hstack(xs), lad
-    
-    

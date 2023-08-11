@@ -14,7 +14,7 @@ class HiddenPrints:
         sys.stdout.close()
         sys.stdout = self._original_stdout
 
-def estimate_df(marginal_data):
+def estimate_df(marginal_data, verbose=True):
     ordered_data = np.sort(np.abs(marginal_data))[::-1]
 
     amse_border = 1.
@@ -47,21 +47,26 @@ def estimate_df(marginal_data):
 
     if tail_estimators["moments"] == tail_estimators["kernel"] == 0:
         final_estimator = 0
-        print("This distribution is light-tailed!")
+        if verbose:
+            print("This distribution is light-tailed!")
     else:
         if tail_estimators["hill"]!=0:
             final_estimator = tail_estimators["hill"] - 1.
-            print("This distribution is heavy-tailed with tail index equal to {} (Adjusted Hill estimated tail index)".format(final_estimator))
+            if verbose:
+                print("This distribution is heavy-tailed with tail index equal to {} (Adjusted Hill estimated tail index)".format(final_estimator))
         elif tail_estimators["moments"]!=0:
             final_estimator = tail_estimators["moments"] - 1.
-            print("This distribution is heavy-tailed with tail index equal to {} (Moments estimated tail index)".format(
-                    final_estimator))
+            if verbose:
+                print("This distribution is heavy-tailed with tail index equal to {} (Moments estimated tail index)".format(
+                        final_estimator))
         else:
-            final_estimator = tail_estimators["kernel"] - 1.
-            print(
-                "This distribution is heavy-tailed with tail index equal to {} (Kernel-type estimated tail index)".format(
-                    final_estimator))
-            
+            final_estimator = tail_estimators["kernel"] - 1
+            if verbose:
+                print(
+                    "This distribution is heavy-tailed with tail index equal to {} (Kernel-type estimated tail index)".format(
+                        final_estimator)
+                )
+                
     plt.close()
     plt.interactive(True)
     

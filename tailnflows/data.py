@@ -150,8 +150,8 @@ class MTAFCopula(Dataset):
 
 class NoiseDim(Dataset):
     def __init__(
-            self, dtype, device, random_seed, 
-            data_use: DataUse, num_samples=20000, d_nuisance=8, df=1., heavy_nuisance=True, 
+            self, random_seed, 
+            data_use: DataUse, num_samples=10000, d_nuisance=8, df=1., heavy_nuisance=True, 
             val_prop=0.2, tst_prop=0.4
         ):
         self.d_nuisance = d_nuisance
@@ -159,7 +159,7 @@ class NoiseDim(Dataset):
         self.num_samples = num_samples
         self.heavy_nuisance = heavy_nuisance
         
-        generator = torch.Generator(device=device)
+        generator = torch.Generator()
         generator.manual_seed(random_seed)
 
         n_val = int(val_prop * num_samples)
@@ -190,13 +190,13 @@ class NoiseDim(Dataset):
         x_tst = (x_tst - trn_mean) / trn_std
 
         if data_use == 'train':
-            self.data = x_trn.to(device)
+            self.data = x_trn
             self.n = n_trn
         elif data_use == 'test':
-            self.data = x_tst.to(device)
+            self.data = x_tst
             self.n = n_tst
         elif data_use == 'validate':
-            self.data = x_val.to(device)
+            self.data = x_val
             self.n = n_val
         else:
             raise Exception(f'Invalid data use: {data_use}')

@@ -27,7 +27,9 @@ def _get_intial_permutation(degrees_of_freedom):
             perm_ix[ix] = heavy_ix
             heavy_ix += 1
 
-    return Permutation(perm_ix)
+    permutation = Permutation(perm_ix)
+    rearranged_dfs, _ = permutation.forward(torch.tensor(degrees_of_freedom).reshape(1, -1))
+    return permutation, rearranged_dfs.squeeze()
 
 class mTAF(Flow):
     def __init__(self, dim, model_kwargs={}):
@@ -45,11 +47,13 @@ class mTAF(Flow):
 
     def configure_tails(self, degrees_of_freedom):
         self.degrees_of_freedom = degrees_of_freedom
-        self._distribution = NormalStudentTJoint(degrees_of_freedom)
+        
         num_light = int(sum(df == 0 for df in degrees_of_freedom))
         num_heavy = int(self._distribution.dim - num_light)
 
-        transforms = [_get_intial_permutation(degrees_of_freedom)]
+        initial_perm, degrees_of_freedom = _get_intial_permutation(degrees_of_freedom)
+        transforms = [initial_perm]
+        self._distribution = NormalStudentTJoint(degrees_of_freedom)
         for _ in range(self.num_layers):
             transforms.append(TailRandomPermutation(num_light, num_heavy))
             transforms.append(TailLU(self._distribution.dim, int(num_heavy), device='cpu'))
