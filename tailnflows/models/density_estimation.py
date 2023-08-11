@@ -38,7 +38,8 @@ class ModelKwargs(TypedDict, total=False):
 
 
 ModelName = Enum(
-    "ModelName", ["TTF", "TTF_dextreme", "TTF_m", "EXF", "EXF_m", "RQS", "gTAF", "mTAF"]
+    "ModelName",
+    ["TTF", "TTF_dextreme", "TTF_m", "EXF", "EXF_m", "RQS", "gTAF", "mTAF", "COMET"],
 )
 
 
