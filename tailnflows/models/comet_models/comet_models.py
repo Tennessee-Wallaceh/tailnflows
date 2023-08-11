@@ -301,8 +301,8 @@ class MarginalLayer(nn.Module):
         self.tails = nn.ModuleList(tails)
 
         # echo xi parameters from tail model to command line
-        print(f"Lower xi: {[x.lower_xi for x in self.tails]}")
-        print(f"Upper xi: {[x.upper_xi for x in self.tails]}")
+        # print(f"Lower xi: {[x.lower_xi for x in self.tails]}")
+        # print(f"Upper xi: {[x.upper_xi for x in self.tails]}")
 
         # define KDE mixture for central data
         self.mixture = self.construct_mixture()

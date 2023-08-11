@@ -399,7 +399,6 @@ class COMET(Flow):
                     tails="linear",
                     tail_bound=tail_bound,
                 ),
-                LULinear(features=dim),
             ]
         )
 
