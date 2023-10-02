@@ -79,7 +79,12 @@ class NormalStudentTJoint(JointDistribution):
         marginal_distributions = [
             StandardNormal([1])
             if df == 0
-            else TrainableStudentT(dim=1, init=torch.tensor(df))
+            else TrainableStudentT(
+                dim=1,
+                init=df.clone()
+                .detach()
+                .requires_grad_(True),  # torch recommended copy pattern
+            )
             for df in degrees_of_freedom
         ]
         super(NormalStudentTJoint, self).__init__(*marginal_distributions)
