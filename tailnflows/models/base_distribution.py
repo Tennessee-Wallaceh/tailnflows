@@ -5,7 +5,7 @@ from torch.nn.functional import softplus
 from nflows.distributions.normal import StandardNormal
 from tailnflows.models.utils import inv_sftplus
 from torch.distributions import Categorical, Normal, MixtureSameFamily
-from torch.nn.functional import softplus
+from torch.nn.functional import softplus, softmax
 from torch.special import gammaln
 
 
@@ -161,12 +161,16 @@ class NormalMixture(JointDistribution):
 class GMM(Distribution):
     def __init__(self, n_components):
         super().__init__()
-        self.mixture = torch.nn.Parameter(torch.ones(n_components))
+        self.mixture = torch.nn.Parameter(torch.rand(n_components))
         self.means = torch.nn.Parameter(torch.rand(n_components))
         self.unc_scales = torch.nn.Parameter(torch.rand(n_components))
         self._shape = torch.Size([1])
         self.batch_shape = torch.Size([])
         self.event_shape = torch.Size([1])
+
+    @property
+    def mixture_weights(self):
+        return softmax(self.mixture)
 
     def _log_prob(self, inputs, context):
         return self._gmm().log_prob(inputs)
@@ -175,8 +179,7 @@ class GMM(Distribution):
         return self._gmm().sample(inputs)
 
     def _gmm(self):
-        mixture_probs = self.mixture / self.mixture.sum()
-        mix = Categorical(probs=mixture_probs)
+        mix = Categorical(probs=self.mixture_weights)
         comp = Normal(self.means, softplus(self.unc_scales))
         gmm = MixtureSameFamily(mix, comp)
         return gmm
