@@ -175,7 +175,8 @@ class GMM(Distribution):
         return self._gmm().sample(inputs)
 
     def _gmm(self):
-        mix = Categorical(self.mixture)
+        mixture_probs = self.mixture / self.mixture.sum()
+        mix = Categorical(probs=mixture_probs)
         comp = Normal(self.means, softplus(self.unc_scales))
         gmm = MixtureSameFamily(mix, comp)
         return gmm
