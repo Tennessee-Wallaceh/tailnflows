@@ -50,8 +50,8 @@ def _extreme_inverse_and_lad(x, tail_param):
     z = SQRT_2 * _erfcinv(g)
 
     lad = (-1 - 1 / tail_param) * torch.log(inner)
-    lad += torch.log(0.5 * SQRT_2 * SQRT_PI)
     lad += torch.square(_erfcinv(g))
+    lad += torch.log(SQRT_PI / SQRT_2)
 
     return z, lad
 
@@ -357,12 +357,27 @@ class CopulaMarginalTransform(Transform):
     def __init__(
         self,
         features,
-        init,
+        pos_tail_init,
+        neg_tail_init,
     ):
         self.features = features
         super(CopulaMarginalTransform, self).__init__()
-        init = init * torch.ones(2 * features)  # broadcast 2 for each dimension
-        self._unc_params = torch.nn.parameter.Parameter(inv_sftplus(init + 1))
+        self._unc_pos_tail_params = torch.nn.parameter.Parameter(
+            inv_sftplus(pos_tail_init + 1)
+        )
+        self._unc_neg_tail_params = torch.nn.parameter.Parameter(
+            inv_sftplus(neg_tail_init + 1)
+        )
+        self._unc_params = (
+            torch.stack(
+                [
+                    self._unc_pos_tail_params,
+                    self._unc_neg_tail_params,
+                ]
+            )
+            .t()
+            .flatten()
+        )
 
     def _output_dim_multiplier(self):
         return 2
