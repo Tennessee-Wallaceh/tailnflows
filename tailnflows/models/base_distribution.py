@@ -37,9 +37,12 @@ class TrainableStudentT(Distribution):
         self._shape = torch.Size([dim])
         self.dim = dim
         if hasattr(init, "shape"):
-            _init_unc = inv_sftplus(init)
+            _init_unc = inv_sftplus(init).reshape(-1)
         else:
-            _init_unc = inv_sftplus(torch.ones([dim]) * init)
+            _init_unc = inv_sftplus(torch.ones([dim]) * init).reshape(-1)
+
+        assert _init_unc.shape == [dim], "Degrees of freedom incorrectly initialised!"
+
         self.unc_dfs = torch.nn.parameter.Parameter(_init_unc)
         self.batch_shape = torch.Size([])
         self.event_shape = torch.Size([dim])
