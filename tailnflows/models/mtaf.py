@@ -7,7 +7,7 @@ from nflows.transforms.autoregressive import (
     MaskedPiecewiseRationalQuadraticAutoregressiveTransform,
 )
 from nflows.transforms import Permutation
-from nflows.transforms.base import CompositeTransform
+from nflows.transforms.base import CompositeTransform, InverseTransform
 
 from tailnflows.models.base_distribution import TrainableStudentT, NormalStudentTJoint
 from marginal_tail_adaptive_flows.utils.tail_permutation import (
@@ -31,8 +31,8 @@ def _get_intial_permutation(degrees_of_freedom):
             perm_ix[ix] = heavy_ix
             heavy_ix += 1
 
-    permutation = Permutation(perm_ix)
-    rearranged_dfs, _ = permutation.forward(degrees_of_freedom.clone().reshape(1, -1))
+    permutation = InverseTransform(Permutation(perm_ix))  # ie forward
+    rearranged_dfs, _ = permutation(degrees_of_freedom.clone().reshape(1, -1))
     return permutation, rearranged_dfs.squeeze()
 
 
