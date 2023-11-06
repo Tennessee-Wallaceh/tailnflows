@@ -41,8 +41,8 @@ class TrainableStudentT(Distribution):
         else:
             _init_unc = inv_sftplus(torch.ones([dim]) * init).reshape(-1)
 
-        assert _init_unc.shape == torch.Size(
-            [dim]
+        assert (
+            _init_unc.shape == self._shape
         ), "Degrees of freedom incorrectly initialised!"
 
         self.unc_dfs = torch.nn.parameter.Parameter(_init_unc)
