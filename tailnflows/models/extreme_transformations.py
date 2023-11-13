@@ -194,7 +194,9 @@ class TailMarginalTransform(Transform):
     ):
         self.features = features
         super(TailMarginalTransform, self).__init__()
-        self._unc_params = torch.nn.parameter.Parameter(inv_sftplus(init + 1))
+        self._unc_params = torch.nn.parameter.Parameter(
+            inv_sftplus(init + 1) * torch.ones(features * self._output_dim_multiplier())
+        )
 
     def _output_dim_multiplier(self):
         return 2
@@ -466,8 +468,8 @@ class EXMarginalTransform(Transform):
     def _elementwise_inverse(self, x, autoregressive_params):
         """heavy -> light"""
         unc_ptail, unc_ntail = self._unconstrained_params(autoregressive_params)
-        pos_tail_param = softplus(unc_ptail)  # (-1, inf)
-        neg_tail_param = softplus(unc_ntail)  # (-1, inf)
+        pos_tail_param = softplus(unc_ptail)  # (0, inf)
+        neg_tail_param = softplus(unc_ntail)  # (0, inf)
         tail_param = torch.where(x > 0, pos_tail_param, neg_tail_param)
 
         # tail transform

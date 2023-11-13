@@ -9,7 +9,7 @@ import tqdm
 from tailnflows.models.density_estimation import get_model as get_de_model
 from tailnflows.models.flow_models import get_model
 from tailnflows.targets import targets
-from tailnflows.data import data_sources
+from tailnflows.datasets import data_sources
 from tailnflows.utils import get_project_root
 
 def new_experiment(path):
