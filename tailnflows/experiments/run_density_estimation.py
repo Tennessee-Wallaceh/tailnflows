@@ -18,7 +18,7 @@ from ray.tune.schedulers import ASHAScheduler
 
 # our modules
 from tailnflows.models.density_estimation import get_model, ModelName
-from tailnflows.data import data_sources
+from tailnflows.datasets import data_sources
 from tailnflows.experiments.utils import (
     new_experiment,
     write_experiment_details,
