@@ -389,10 +389,16 @@ class gTAF(Flow):
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
         tail_init = model_kwargs.get("tail_init", 10.0)  # default init from FTVI code
+        rotation = model_kwargs.get("rotation", True)
 
         base_dist = TrainableStudentT(dim, init=tail_init)
-        transforms = [
-            LULinear(features=dim),
+
+        if rotation:
+            transforms = [LULinear(features=dim)]
+        else:
+            transforms = []
+
+        transforms += [
             MaskedAffineAutoregressiveTransform(
                 features=dim,
                 hidden_features=hidden_layer_size,
@@ -430,6 +436,7 @@ class mTAF(Flow):
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
         fix_tails = model_kwargs.get("fix_tails", True)
+        rotation = model_kwargs.get("rotation", True)
 
         assert (
             "tail_init" in model_kwargs
@@ -451,9 +458,13 @@ class mTAF(Flow):
         # always perform the initial permutation
         transforms = [
             initial_permutation,
-            TailLU(
-                dim, int(num_heavy), device="cpu"
-            ),  # rotation within heavy/light groups
+        ]
+
+        if rotation:
+            # rotation within heavy/light groups
+            transforms.append(TailLU(dim, int(num_heavy), device="cpu"))
+
+        transforms += [
             MaskedAffineAutoregressiveTransform(
                 features=dim,
                 hidden_features=hidden_layer_size,
