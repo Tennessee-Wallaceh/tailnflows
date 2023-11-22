@@ -3,18 +3,19 @@ import numpy as np
 from tailnflows.metrics.psis import gpdfitnew
 
 
-def ess(sample_and_log_prob, target, e_samples=1000):
+def ess(sample_and_log_prob, target, samples=1000):
     """
     Produces an ESS based sample efficiency metric.
-    Usually between 0 and 1, a value of around 0.7 would be considered good.
+    Usually between 0 and 1, anything not approaching 0 could be
+    workable, depending on the situation.
     """
-    x_approx, log_q_x = sample_and_log_prob(e_samples)
+    x_approx, log_q_x = sample_and_log_prob(samples)
     log_p_x = target(x_approx)
     log_iw = log_p_x - log_q_x
-    iw = torch.exp(log_iw)
-    norm = torch.sum(iw)
-    norm_iw = iw / norm
-    ess_efficiency = 1 / (torch.sum(norm_iw**2) * e_samples)
+    log_norm = torch.logsumexp(log_iw, 0)
+    log_norm_iw = log_iw - log_norm
+    ess_efficiency = 1 / torch.exp(2 * log_norm_iw).sum()
+    ess_efficiency = ess_efficiency / samples
     return ess_efficiency
 
 
@@ -44,6 +45,6 @@ def psis_index(sample_and_log_prob, target, samples=1000):
     tail_log_iw = sorted_log_iw[-M:]
     threshold = sorted_log_iw[-M - 1]
 
-    tail_iw_exceedences = torch.exp(tail_log_iw) - torch.exp(threshold)
+    tail_iw_exceedences = torch.exp(threshold) * torch.expm1(tail_log_iw - threshold)
     k, _ = gpdfitnew(tail_iw_exceedences.detach().cpu().numpy())
     return k

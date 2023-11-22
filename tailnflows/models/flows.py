@@ -31,6 +31,7 @@ from marginal_tail_adaptive_flows.utils.tail_permutation import (
     TailRandomPermutation,
     TailLU,
 )
+from tailnflows.models.utils import Softplus
 
 
 def _get_intial_permutation(degrees_of_freedom):
@@ -66,6 +67,8 @@ class ModelKwargs(TypedDict, total=False):
     fix_tails: Optional[bool]
 
 
+Domain = Enum("Domain", ["positive"])
+
 ModelName = Enum(
     "ModelName",
     [
@@ -89,6 +92,7 @@ class TTF(Flow):
         dim: int,
         use: ModelUse = ModelUse.density_estimation,
         model_kwargs: ModelKwargs = {},
+        domain: Optional[Domain] = None,
     ):
         hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
         num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
@@ -104,6 +108,7 @@ class TTF(Flow):
                 features=dim, hidden_features=hidden_layer_size, num_blocks=2
             )
         ]
+
         if use == ModelUse.density_estimation:
             # if using for density estimation, the tail transformation needs to be flipped
             # this keeps the autoregression in the data->noise direction, but means data->noise is
@@ -126,6 +131,9 @@ class TTF(Flow):
 
         if use == ModelUse.variational_inference:
             transforms = [InverseTransform(transform) for transform in transforms]
+
+        if domain == Domain.positive:
+            transforms = [Softplus()] + transforms
 
         super().__init__(
             transform=CompositeTransform(transforms),
@@ -456,9 +464,7 @@ class mTAF(Flow):
         )
 
         # always perform the initial permutation
-        transforms = [
-            initial_permutation,
-        ]
+        transforms = [initial_permutation]
 
         if rotation:
             # rotation within heavy/light groups

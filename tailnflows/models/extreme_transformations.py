@@ -190,13 +190,18 @@ class TailMarginalTransform(Transform):
     def __init__(
         self,
         features,
-        init,
+        init=None,
     ):
         self.features = features
         super(TailMarginalTransform, self).__init__()
-        self._unc_params = torch.nn.parameter.Parameter(
-            inv_sftplus(init + 1) * torch.ones(features * self._output_dim_multiplier())
-        )
+
+        if init is None:
+            init = torch.distributions.Uniform(-0.5, 0.5).sample(
+                [features * self._output_dim_multiplier()]
+            )
+
+        assert torch.Size([features * self._output_dim_multiplier()]) == init.shape
+        self._unc_params = torch.nn.parameter.Parameter(inv_sftplus(init + 1))
 
     def _output_dim_multiplier(self):
         return 2
@@ -678,3 +683,51 @@ class Marginal(Transform):
             xs.append(x)
             lad += _lad
         return torch.hstack(xs), lad
+
+
+def bisection_search(func, x_0_low, x_0_high, target, tol=1e-6, max_iter=100):
+    for i in range(max_iter):
+        x_mid = 0.5 * (x_0_low + x_0_high)
+        f_mid = func(x_mid)
+        error = f_mid - target
+        if (error.abs() < tol).all():
+            return x_mid
+
+        x_0_low = torch.where(error < 0, x_mid, x_0_low)
+        x_0_high = torch.where(error > 0, x_mid, x_0_high)
+
+    return 0.5 * (x_0_low + x_0_high)
+
+
+class Mixture(Transform):
+    def __init__(self, transform_1, transform_2):
+        self.transform_1 = transform_1
+        self.transform_2 = transform_2
+        self._unc_mix_param = torch.nn.Parameter(torch.tensor(0.0))
+        super(Transform, self).__init__()
+
+    def inverse(self, x, context=None):
+        z_1, lad_1 = transform_1.inverse(x, context)
+        z_2, lad_2 = transform_2.inverse(x, context)
+
+        mix_param = softplus(self._unc_mix_param)
+
+        z = z_1 * mix_param + z_2 * (1 - mix_param)
+        z = lad_1 * mix_param + lad_2 * (1 - mix_param)
+
+        return torch.hstack(xs), lad
+
+    def forward(self, z, context=None):
+        x_1, _ = self.transform_1.forward(z)
+        x_2, _ = self.transform_2.forward(z)
+        x_1_higher = x_1 > x_2
+        x_0_high = torch.where(x_1_higher, x_1, x_0)
+        x_0_low = torch.where(x_1_higher, x_2, x_1)
+
+        inverse_trans = lambda x: self.inverse(x, context)
+        x = bisection_search(
+            inverse_trans, x_0_low, x_0_high, target=z, tol=1e-6, max_iter=100
+        )  # which x gives z?
+        _, inv_lad = inverse_trans(x.detach())
+        lad = -inv_lad
+        return x, lad
