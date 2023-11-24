@@ -13,5 +13,5 @@ dependencies:
   - pip>=3.0.0
   - pip:
     - posteriordb
-    - nflows==0.14
+    - git+https://github.com/Tennessee-Wallaceh/nflows
     - flowtorch==0.5
