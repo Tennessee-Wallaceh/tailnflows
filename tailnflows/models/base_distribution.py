@@ -160,17 +160,14 @@ class NormalStudentTJoint(JointDistribution):
         t_dim = 0
         normal_marginal_ix = []
         t_marginal_ix = []
-        df_init = []
 
         for df_ix, df in enumerate(degrees_of_freedom):
             if df == 0:
                 normal_dim += 1
                 normal_marginal_ix.append(df_ix)
             else:
-                df_init.append(df)
-                t_marginal_ix.append(df_ix)
-
                 t_dim += 1
+                t_marginal_ix.append(df_ix)
 
         if normal_dim == 0:
             marginal_distributions = [
@@ -183,8 +180,8 @@ class NormalStudentTJoint(JointDistribution):
 
         else:
             marginal_distributions = [
-                StandardNormal([t_dim]),
-                TrainableStudentT(dim=t_dim, init=degrees_of_freedom),
+                StandardNormal([normal_dim]),
+                TrainableStudentT(dim=t_dim, init=degrees_of_freedom[t_marginal_ix]),
             ]
             marginals = [
                 torch.tensor(normal_marginal_ix),
