@@ -112,49 +112,86 @@ class GeneralisedNormal(Distribution):
 
 
 class JointDistribution(Distribution):
-    def __init__(self, *marginal_distributions):
+    def __init__(self, marginal_distributions, marginals):
         super(JointDistribution, self).__init__()
 
-        assert all(md._shape == torch.Size([1]) for md in marginal_distributions)
+        assert len(marginal_distributions) == len(marginals)
+        self.dim = sum(md._shape[0] for md in marginal_distributions)
+        assert (
+            torch.concatenate(marginals).sort().values == torch.arange(self.dim)
+        ).all()
 
         # use of ModuleList registers each submodule
         self.marginal_distributions = torch.nn.ModuleList(marginal_distributions)
-        self.dim = len(marginal_distributions)
+        self.marginals = marginals
         self._shape = torch.Size([self.dim])
+        self._device_p = torch.nn.Parameter(torch.empty(0))
+
+    @property
+    def device(self):
+        return self._device_p.device
+
+    @property
+    def dtype(self):
+        return self._device_p.dtype
 
     def _log_prob(self, inputs, context):
         _log_prob = torch.zeros_like(inputs[:, 0])
-        for _dim_ix in range(self.dim):
-            _log_prob += (
-                self.marginal_distributions[_dim_ix]
-                ._log_prob(inputs[:, [_dim_ix]], context)
-                .reshape(-1)
-            )
+        for marginal_dist, marginal_ix in zip(
+            self.marginal_distributions, self.marginals
+        ):
+            _log_prob += marginal_dist.log_prob(inputs[:, marginal_ix])
+
         return _log_prob
 
     def _sample(self, num_samples, context):
-        return torch.hstack(
-            [
-                self.marginal_distributions[_dim_ix].sample(num_samples, context)
-                for _dim_ix in range(self.dim)
-            ]
-        )
+        x = torch.zeros([num_samples, self.dim], dtype=self.dtype, device=self.device)
+        for marginal_dist, marginal_ix in zip(
+            self.marginal_distributions, self.marginals
+        ):
+            x[:, marginal_ix] = marginal_dist.sample(num_samples)
+
+        return x
 
 
 class NormalStudentTJoint(JointDistribution):
     def __init__(self, degrees_of_freedom):
-        marginal_distributions = [
-            StandardNormal([1])
-            if df == 0
-            else TrainableStudentT(
-                dim=1,
-                init=df.clone()
-                .detach()
-                .requires_grad_(True),  # torch recommended copy pattern
-            )
-            for df in degrees_of_freedom
-        ]
-        super(NormalStudentTJoint, self).__init__(*marginal_distributions)
+        normal_dim = 0
+        t_dim = 0
+        normal_marginal_ix = []
+        t_marginal_ix = []
+        df_init = []
+
+        for df_ix, df in enumerate(degrees_of_freedom):
+            if df == 0:
+                normal_dim += 1
+                normal_marginal_ix.append(df_ix)
+            else:
+                df_init.append(df)
+                t_marginal_ix.append(df_ix)
+
+                t_dim += 1
+
+        if normal_dim == 0:
+            marginal_distributions = [
+                TrainableStudentT(dim=t_dim, init=degrees_of_freedom)
+            ]
+            marginals = [torch.arange(t_dim, dtype=torch.int)]
+        elif t_dim == 0:
+            marginal_distributions = [StandardNormal([normal_dim])]
+            marginals = [torch.arange(normal_dim, dtype=torch.int)]
+
+        else:
+            marginal_distributions = [
+                StandardNormal([t_dim]),
+                TrainableStudentT(dim=t_dim, init=degrees_of_freedom),
+            ]
+            marginals = [
+                torch.tensor(normal_marginal_ix),
+                torch.tensor(t_marginal_ix),
+            ]
+
+        super(NormalStudentTJoint, self).__init__(marginal_distributions, marginals)
 
 
 class NormalMixture(JointDistribution):

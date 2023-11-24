@@ -152,7 +152,7 @@ class TTF_m(Flow):
         num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", torch.tensor(-0.5))
+        tail_init = model_kwargs.get("tail_init", None)
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
 
