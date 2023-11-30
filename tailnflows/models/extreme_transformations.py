@@ -16,6 +16,8 @@ class ExtremeActivation(torch.nn.Module):
         super().__init__()
         self.in_dim = dim
         self._unc_mix = torch.nn.Parameter(torch.ones([dim, 3]))
+        with torch.no_grad():
+            self._unc_mix[:, 0] = 5.0  # init at identity
         self._unc_params = torch.nn.Parameter(torch.ones([dim, 2]))
         self.mix = torch.nn.Softmax(dim=1)
 
@@ -159,21 +161,36 @@ class MarginalTailAutoregressiveAffineTransform(AutoregressiveTransform):
         use_batch_norm=False,
         fix_tails=False,
         tail_init=None,
+        exnet=False,
     ):
         self.features = features
 
-        made = ExtremeNetwork(
-            features=features,
-            hidden_features=hidden_features,
-            context_features=context_features,
-            num_blocks=num_blocks,
-            output_multiplier=2,  # shift + scale
-            use_residual_blocks=use_residual_blocks,
-            random_mask=random_mask,
-            activation=activation,
-            dropout_probability=dropout_probability,
-            use_batch_norm=use_batch_norm,
-        )
+        if exnet:
+            made = ExtremeNetwork(
+                features=features,
+                hidden_features=hidden_features,
+                context_features=context_features,
+                num_blocks=num_blocks,
+                output_multiplier=2,  # shift + scale
+                use_residual_blocks=use_residual_blocks,
+                random_mask=random_mask,
+                activation=activation,
+                dropout_probability=dropout_probability,
+                use_batch_norm=use_batch_norm,
+            )
+        else:
+            made = made_module.MADE(
+                features=features,
+                hidden_features=hidden_features,
+                context_features=context_features,
+                num_blocks=num_blocks,
+                output_multiplier=2,  # shift + scale
+                use_residual_blocks=use_residual_blocks,
+                random_mask=random_mask,
+                activation=activation,
+                dropout_probability=dropout_probability,
+                use_batch_norm=use_batch_norm,
+            )
 
         super(MarginalTailAutoregressiveAffineTransform, self).__init__(made)
 

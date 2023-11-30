@@ -161,6 +161,7 @@ class TTF_mt_aa(Flow):
         tail_init = model_kwargs.get("tail_init", None)
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
+        use_exnet = model_kwargs.get("use_exnet", True)
 
         base_distribution = StandardNormal([dim])
         transforms = [
@@ -170,6 +171,7 @@ class TTF_mt_aa(Flow):
                 fix_tails=fix_tails,
                 hidden_features=dim * 2,
                 num_blocks=2,
+                exnet=use_exnet,
             ),
         ]
 
