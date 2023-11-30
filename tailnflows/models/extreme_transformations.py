@@ -11,6 +11,56 @@ SQRT_PI = torch.sqrt(torch.tensor(torch.pi))
 MIN_ERFC_INV = torch.tensor(5e-7)
 
 
+class ExtremeActivation(torch.nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.in_dim = dim
+        self._unc_mix = torch.nn.Parameter(torch.ones([dim, 3]))
+        self._unc_params = torch.nn.Parameter(torch.ones([dim, 2]))
+        self.mix = torch.nn.Softmax(dim=1)
+
+    def params(self):
+        params = torch.nn.functional.sigmoid(self._unc_params) * 2
+        heavy_tail = params[..., 0]
+        light_tail = params[..., 1]
+        return heavy_tail, light_tail
+
+    def forward(self, z):
+        heavy_tail, light_tail = self.params()
+        mix = self.mix(self._unc_mix)  # dim x 3
+
+        z_heavy = (
+            _extreme_transform_and_lad(z.abs(), heavy_tail)[0] * z.sign()
+        )  # batch x dim
+        z_light = (
+            _extreme_inverse_and_lad(z.abs(), light_tail)[0] * z.sign()
+        )  # batch x dim
+
+        combo = mix[:, 0] * z + mix[:, 1] * z_heavy + mix[:, 2] * z_light
+
+        return combo
+
+
+class ExtremeNetwork(torch.nn.Module):
+    def __init__(
+        self, features, hidden_features, num_blocks, output_multiplier, **kwargs
+    ):
+        super().__init__()
+        self.base_model = made_module.MADE(
+            features=features,
+            hidden_features=hidden_features,
+            num_blocks=num_blocks,
+            output_multiplier=output_multiplier,
+            **kwargs
+        )
+        self.extreme_activation = ExtremeActivation(features * output_multiplier)
+
+    def forward(self, x, context=None):
+        param_data = self.base_model(x, context)
+        adjusted_param_data = self.extreme_activation(param_data)
+        return adjusted_param_data
+
+
 def _erfcinv(x):
     # with torch.no_grad():
     #     x = torch.clamp(x, min=MIN_ERFC_INV)
@@ -93,6 +143,114 @@ def flip(transform):
     transform._elementwise_inverse = transform._elementwise_forward
     transform._elementwise_forward = _inverse
     return transform
+
+
+class MarginalTailAutoregressiveAffineTransform(AutoregressiveTransform):
+    def __init__(
+        self,
+        features,
+        hidden_features,
+        context_features=None,
+        num_blocks=2,
+        use_residual_blocks=True,
+        random_mask=False,
+        activation=relu,
+        dropout_probability=0.0,
+        use_batch_norm=False,
+        fix_tails=False,
+        tail_init=None,
+    ):
+        self.features = features
+
+        made = ExtremeNetwork(
+            features=features,
+            hidden_features=hidden_features,
+            context_features=context_features,
+            num_blocks=num_blocks,
+            output_multiplier=2,  # shift + scale
+            use_residual_blocks=use_residual_blocks,
+            random_mask=random_mask,
+            activation=activation,
+            dropout_probability=dropout_probability,
+            use_batch_norm=use_batch_norm,
+        )
+
+        super(MarginalTailAutoregressiveAffineTransform, self).__init__(made)
+
+        if tail_init is None:
+            self._unc_ptail = torch.nn.Parameter(torch.ones([features]))
+            self._unc_ntail = torch.nn.Parameter(torch.ones([features]))
+        else:
+            assert torch.Size([features]) == tail_init.shape
+            self._unc_ptail = torch.nn.parameter.Parameter(inv_sftplus(tail_init + 1))
+            self._unc_ntail = torch.nn.parameter.Parameter(inv_sftplus(tail_init + 1))
+
+        if fix_tails:
+            self._unc_ptail.requires_grad = False
+            self._unc_ntail.requires_grad = False
+
+    def _output_dim_multiplier(self):
+        return 2
+
+    def _elementwise_forward(self, z, autoregressive_params):
+        """light -> heavy"""
+        shift_param, scale_param = self.constrained_params(autoregressive_params)
+        pos_tail_param, neg_tail_param = self.tail_params()
+        tail_param = torch.where(
+            z > 0,
+            pos_tail_param.repeat(z.shape[0], 1),
+            neg_tail_param.repeat(z.shape[0], 1),
+        )
+
+        sign = torch.sign(z)
+        heavy_x, heavy_lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
+        light_x, light_lad = _shift_power_transform_and_lad(
+            torch.abs(z), tail_param + 2.0
+        )
+
+        x = torch.where(tail_param > 0.0, heavy_x, light_x)
+        lad = torch.where(tail_param > 0.0, heavy_lad, light_lad)
+
+        return sign * x * scale_param + shift_param, (lad + torch.log(scale_param)).sum(
+            axis=1
+        )
+
+    def _elementwise_inverse(self, x, autoregressive_params):
+        """heavy -> light"""
+        shift_param, scale_param = self.constrained_params(autoregressive_params)
+        pos_tail_param, neg_tail_param = self.tail_params()
+
+        # affine transform
+        x = (x - shift_param) / scale_param
+        tail_param = torch.where(
+            x > 0,
+            pos_tail_param.repeat(x.shape[0], 1),
+            neg_tail_param.repeat(x.shape[0], 1),
+        )
+
+        # tail transform
+        sign = torch.sign(x)
+        heavy_z, heavy_lad = _extreme_inverse_and_lad(
+            torch.abs(x), torch.abs(tail_param)
+        )
+        light_z, light_lad = _shift_power_inverse_and_lad(torch.abs(x), tail_param + 2)
+        z = torch.where(tail_param > 0.0, heavy_z, light_z)
+        lad = torch.where(tail_param > 0.0, heavy_lad, light_lad)
+
+        return sign * z, (lad - torch.log(scale_param)).sum(axis=1)
+
+    def constrained_params(self, autoregressive_params):
+        autoregressive_params = autoregressive_params.view(
+            -1, self.features, self._output_dim_multiplier()
+        )
+        shift_param = autoregressive_params[..., 0]
+        scale_param = 1e-3 + softplus(autoregressive_params[..., 1])
+        return (shift_param, scale_param)
+
+    def tail_params(self):
+        pos_tail_param = softplus(self._unc_ptail) - 1.0  # (-1, inf)
+        neg_tail_param = softplus(self._unc_ntail) - 1.0  # (-1, inf)
+        return (pos_tail_param, neg_tail_param)
 
 
 class MaskedTailAutoregressiveTransform(AutoregressiveTransform):

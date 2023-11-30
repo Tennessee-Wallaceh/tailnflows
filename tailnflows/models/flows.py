@@ -25,6 +25,7 @@ from tailnflows.models.extreme_transformations import (
     PowerMarginalTransform,
     SinhMarginalTransform,
     CopulaMarginalTransform,
+    MarginalTailAutoregressiveAffineTransform,
 )
 from tailnflows.models.base_distribution import TrainableStudentT, NormalStudentTJoint
 from marginal_tail_adaptive_flows.utils.tail_permutation import (
@@ -74,6 +75,7 @@ ModelName = Enum(
     [
         "TTF",
         "TTF_m",
+        "TTF_mt_aa",
         "EXF",
         "EXF_m",
         "RQS",
@@ -134,6 +136,65 @@ class TTF(Flow):
 
         if domain == Domain.positive:
             transforms = [Softplus()] + transforms
+
+        super().__init__(
+            transform=CompositeTransform(transforms),
+            distribution=base_distribution,
+        )
+
+
+class TTF_mt_aa(Flow):
+    """
+    Version of TTF with autoregressive affine + marginal tail
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        use: ModelUse = ModelUse.density_estimation,
+        model_kwargs: ModelKwargs = {},
+    ):
+        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
+        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
+        tail_bound = model_kwargs.get("tail_bound", 2.5)
+        num_bins = model_kwargs.get("num_bins", 8)
+        tail_init = model_kwargs.get("tail_init", None)
+        rotation = model_kwargs.get("rotation", True)
+        fix_tails = model_kwargs.get("fix_tails", True)
+
+        base_distribution = StandardNormal([dim])
+        transforms = [
+            MarginalTailAutoregressiveAffineTransform(
+                features=dim,
+                tail_init=tail_init,
+                fix_tails=fix_tails,
+                hidden_features=dim * 2,
+                num_blocks=2,
+            ),
+        ]
+
+        if use == ModelUse.density_estimation:
+            # if using for density estimation, the tail transformation needs to be flipped
+            # this keeps the autoregression in the data->noise direction, but means data->noise is
+            # a strictly lightening transformation
+            transforms[0] = flip(transforms[0])
+
+        if rotation:
+            transforms.append(LULinear(features=dim))
+
+        transforms += [
+            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
+                features=dim,
+                hidden_features=hidden_layer_size,
+                num_blocks=num_hidden_layers,
+                num_bins=num_bins,
+                tails="linear",
+                tail_bound=tail_bound,
+            )
+        ]
+
+        if use == ModelUse.variational_inference:
+            transforms = [InverseTransform(transform) for transform in transforms]
 
         super().__init__(
             transform=CompositeTransform(transforms),
@@ -305,14 +366,20 @@ class EXF_m(Flow):
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
         rotation = model_kwargs.get("rotation", True)
+        fix_tails = model_kwargs.get("fix_tails", True)
+        tail_init = model_kwargs.get("tail_init", None)
 
         base_distribution = StandardNormal([dim])
         transforms = [
-            EXMarginalTransform(features=dim),
+            EXMarginalTransform(features=dim, init=tail_init),
             MaskedAffineAutoregressiveTransform(
                 features=dim, hidden_features=dim * 2, num_blocks=2
             ),
         ]
+
+        if fix_tails:
+            for parameter in transforms[0].parameters():
+                parameter.requires_grad = False
 
         if use == ModelUse.density_estimation:
             # if using for density estimation, the tail transformation needs to be flipped
@@ -554,6 +621,7 @@ models: dict[ModelName, Type[Flow]] = {
     ModelName.mTAF: mTAF,
     ModelName.COMET: COMET,
     ModelName.Copula_m: Copula_m,
+    ModelName.TTF_mt_aa: TTF_mt_aa,
 }
 
 
