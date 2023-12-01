@@ -32,10 +32,13 @@ def generalized_normal_log_pdf(x, beta):
 class TrainableStudentT(Distribution):
     MIN_DF = 1e-3  # minimum degrees of freedom, needed for numerical stability
 
-    def __init__(self, dim=2, init=1.0):
+    def __init__(self, dim=2, init=None):
         super().__init__()
         self._shape = torch.Size([dim])
         self.dim = dim
+        if init is None:
+            init = torch.distribution.Uniform(1.0, 20.0).sample([dim])
+
         if hasattr(init, "shape"):
             _init_unc = inv_sftplus(init).reshape(-1)
         else:

@@ -465,7 +465,7 @@ class gTAF(Flow):
         num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", 10.0)  # default init from FTVI code
+        tail_init = model_kwargs.get("tail_init", None)  # default init from FTVI code
         rotation = model_kwargs.get("rotation", True)
 
         base_dist = TrainableStudentT(dim, init=tail_init)
