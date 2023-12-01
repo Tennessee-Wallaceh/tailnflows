@@ -218,38 +218,45 @@ class TTF_m(Flow):
         tail_init = model_kwargs.get("tail_init", None)
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
+        num_layers = model_kwargs.get("num_layers", 1)
 
         base_distribution = StandardNormal([dim])
-        transforms = [
-            TailMarginalTransform(features=dim, init=tail_init),
-            MaskedAffineAutoregressiveTransform(
-                features=dim, hidden_features=dim * 2, num_blocks=2
-            ),
-        ]
+
+        # set up tail transform
+        tail_transform = TailMarginalTransform(features=dim, init=tail_init)
 
         if fix_tails:
-            for parameter in transforms[0].parameters():
+            for parameter in tail_transform.parameters():
                 parameter.requires_grad = False
 
         if use == ModelUse.density_estimation:
             # if using for density estimation, the tail transformation needs to be flipped
             # this keeps the autoregression in the data->noise direction, but means data->noise is
             # a strictly lightening transformation
-            transforms[0] = flip(transforms[0])
+            tail_transform = flip(tail_transform)
 
-        if rotation:
-            transforms.append(LULinear(features=dim))
+        transforms = [tail_transform]
 
-        transforms += [
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
+        for layer in range(num_layers):
+            transforms.append(
+                MaskedAffineAutoregressiveTransform(
+                    features=dim, hidden_features=dim * 2, num_blocks=2
+                )
             )
-        ]
+
+            if rotation:
+                transforms.append(LULinear(features=dim))
+
+            transforms.append(
+                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
+                    features=dim,
+                    hidden_features=hidden_layer_size,
+                    num_blocks=num_hidden_layers,
+                    num_bins=num_bins,
+                    tails="linear",
+                    tail_bound=tail_bound,
+                )
+            )
 
         if use == ModelUse.variational_inference:
             transforms = [InverseTransform(transform) for transform in transforms]
@@ -577,6 +584,7 @@ class COMET(Flow):
     def __init__(
         self,
         dim: int,
+        data: torch.Tensor,
         use: ModelUse = ModelUse.density_estimation,
         model_kwargs: ModelKwargs = {},
     ):
@@ -588,7 +596,7 @@ class COMET(Flow):
         num_bins = model_kwargs.get("num_bins", 8)
         transform = CompositeTransform(
             [
-                MarginalLayer(x_trn),
+                MarginalLayer(data),
                 Logit(),
                 MaskedAffineAutoregressiveTransform(
                     features=dim,

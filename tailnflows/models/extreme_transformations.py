@@ -16,8 +16,8 @@ class ExtremeActivation(torch.nn.Module):
         super().__init__()
         self.in_dim = dim
         self._unc_mix = torch.nn.Parameter(torch.ones([dim, 3]))
-        with torch.no_grad():
-            self._unc_mix[:, 0] = 5.0  # init at identity
+        # with torch.no_grad():
+        #     self._unc_mix[:, 0] = 5.0  # init at identity
         self._unc_params = torch.nn.Parameter(torch.ones([dim, 2]))
         self.mix = torch.nn.Softmax(dim=1)
 
@@ -371,7 +371,8 @@ class TailMarginalTransform(Transform):
         super(TailMarginalTransform, self).__init__()
 
         if init is None:
-            init = torch.distributions.Uniform(-0.5, 0.5).sample(
+            # init with heavy tail, otherwise heavy targets may fail to fit
+            init = torch.distributions.Uniform(0.1, 0.9).sample(
                 [features * self._output_dim_multiplier()]
             )
 
