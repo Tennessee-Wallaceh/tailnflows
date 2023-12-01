@@ -218,7 +218,7 @@ class TTF_m(Flow):
         tail_init = model_kwargs.get("tail_init", None)
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
-        num_layers = model_kwargs.get("num_layers", 1)
+        flow_depth = model_kwargs.get("flow_depth", 1)
 
         base_distribution = StandardNormal([dim])
 
@@ -237,15 +237,15 @@ class TTF_m(Flow):
 
         transforms = [tail_transform]
 
-        for layer in range(num_layers):
+        for _ in range(flow_depth):
+            if rotation:
+                transforms.append(LULinear(features=dim))
+
             transforms.append(
                 MaskedAffineAutoregressiveTransform(
                     features=dim, hidden_features=dim * 2, num_blocks=2
                 )
             )
-
-            if rotation:
-                transforms.append(LULinear(features=dim))
 
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
@@ -474,6 +474,7 @@ class gTAF(Flow):
         num_bins = model_kwargs.get("num_bins", 8)
         tail_init = model_kwargs.get("tail_init", None)  # default init from FTVI code
         rotation = model_kwargs.get("rotation", True)
+        nn_activation = model_kwargs.get("nn_activation", torch.nn.functional.relu)
 
         base_dist = TrainableStudentT(dim, init=tail_init)
 
@@ -487,6 +488,7 @@ class gTAF(Flow):
                 features=dim,
                 hidden_features=hidden_layer_size,
                 num_blocks=num_hidden_layers,
+                activation=nn_activation,
             ),
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim,
@@ -495,6 +497,7 @@ class gTAF(Flow):
                 num_bins=num_bins,
                 tails="linear",
                 tail_bound=tail_bound,
+                activation=nn_activation,
             ),
         ]
 
@@ -521,6 +524,8 @@ class mTAF(Flow):
         num_bins = model_kwargs.get("num_bins", 8)
         fix_tails = model_kwargs.get("fix_tails", True)
         rotation = model_kwargs.get("rotation", True)
+        flow_depth = model_kwargs.get("flow_depth", 1)
+        nn_activation = model_kwargs.get("nn_activation", torch.nn.functional.relu)
 
         assert (
             "tail_init" in model_kwargs
@@ -542,25 +547,31 @@ class mTAF(Flow):
         # always perform the initial permutation
         transforms = [initial_permutation]
 
-        if rotation:
-            # rotation within heavy/light groups
-            transforms.append(TailLU(dim, int(num_heavy), device="cpu"))
+        for _ in range(flow_depth):
+            if rotation:
+                # special rotation within heavy/light groups
+                transforms.append(TailLU(dim, int(num_heavy), device="cpu"))
 
-        transforms += [
-            MaskedAffineAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-            ),
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
-            ),
-        ]
+            transforms.append(
+                MaskedAffineAutoregressiveTransform(
+                    features=dim,
+                    hidden_features=num_hidden_layers,
+                    num_blocks=num_hidden_layers,
+                    activation=nn_activation,
+                )
+            )
+
+            transforms.append(
+                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
+                    features=dim,
+                    hidden_features=hidden_layer_size,
+                    num_blocks=num_hidden_layers,
+                    num_bins=num_bins,
+                    tails="linear",
+                    tail_bound=tail_bound,
+                    activation=nn_activation,
+                )
+            )
 
         if use == ModelUse.variational_inference:
             # avoid inverting the permutation
