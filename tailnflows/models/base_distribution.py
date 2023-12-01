@@ -37,7 +37,7 @@ class TrainableStudentT(Distribution):
         self._shape = torch.Size([dim])
         self.dim = dim
         if init is None:
-            init = torch.distribution.Uniform(1.0, 20.0).sample([dim])
+            init = torch.distributions.Uniform(1.0, 20.0).sample([dim])
 
         if hasattr(init, "shape"):
             _init_unc = inv_sftplus(init).reshape(-1)
