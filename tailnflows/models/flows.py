@@ -33,6 +33,7 @@ from marginal_tail_adaptive_flows.utils.tail_permutation import (
     TailLU,
 )
 from tailnflows.models.utils import Softplus
+from tailnflows.models.comet_models import MarginalLayer
 
 
 def _get_intial_permutation(degrees_of_freedom):
@@ -605,9 +606,27 @@ class COMET(Flow):
         num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
+        tail_init = model_kwargs.get("tail_init", None)
+        rotation = model_kwargs.get("rotation", False)
+        fix_tails = model_kwargs.get("fix_tails", True)
+        
+        assert rotation == False, 'Rotation not implemented for COMET flow'
+
+        tail_transform = MarginalLayer(data)
+
+        if fix_tails and tail_init is not None:
+            assert len(tail_init) == dim
+            for ix, tail_df in enumerate(tail_init):
+                if tail_df == 0.:
+                    tail_transform.tails[ix].lower_xi = 0.
+                    tail_transform.tails[ix].upper_xi = 0.
+                else:
+                    tail_transform.tails[ix].lower_xi = 1 / tail_df
+                    tail_transform.tails[ix].upper_xi = 1 / tail_df
+
         transform = CompositeTransform(
             [
-                MarginalLayer(data),
+                tail_transform,
                 Logit(),
                 MaskedAffineAutoregressiveTransform(
                     features=dim,
