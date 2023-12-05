@@ -202,6 +202,10 @@ class NormalMixture(JointDistribution):
 
 
 class GMM(Distribution):
+    """
+    Univariate Guassian Mixture Model
+    """
+
     def __init__(self, n_components):
         super().__init__()
         self.mixture = torch.nn.Parameter(torch.rand(n_components))
@@ -213,13 +217,13 @@ class GMM(Distribution):
 
     @property
     def mixture_weights(self):
-        return softmax(self.mixture)
+        return softmax(self.mixture, dim=0)
 
     def _log_prob(self, inputs, context):
-        return self._gmm().log_prob(inputs)
+        return self._gmm().log_prob(inputs).sum(axis=1)
 
     def _sample(self, num_samples, context):
-        return self._gmm().sample(inputs)
+        raise NotImplementedError
 
     def _gmm(self):
         mix = Categorical(probs=self.mixture_weights)
