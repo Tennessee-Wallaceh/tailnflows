@@ -197,7 +197,7 @@ class NormalStudentTJoint(JointDistribution):
 class NormalMixture(JointDistribution):
     def __init__(self, dim, n_component):
         marginal_distributions = [GMM(n_component) for _ in range(dim)]
-        super(NormalMixture, self).__init__(*marginal_distributions)
+        super(NormalMixture, self).__init__(marginal_distributions, torch.arange(dim))
 
 
 class GMM(Distribution):
