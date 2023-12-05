@@ -156,7 +156,6 @@ class TorchGPD(nn.Module):
             )
             lower_cdf = torch.from_numpy(lower_cdf).to(x)
 
-            
         if self.b == 1:
             upper_cdf = torch.zeros((upper_data.shape[0])).to(x)
         else:
@@ -336,7 +335,7 @@ class MarginalLayer(nn.Module):
     def construct_mixture(self):
         mixture = []
         for i in range(self.d):
-            kde = sm.nonparametric.KDEUnivariate(self.anchors[:, i])
+            kde = sm.nonparametric.KDEUnivariate(self.anchors[:, i].cpu().numpy())
             kde.fit()
             mixture.append(kde)
         return mixture
