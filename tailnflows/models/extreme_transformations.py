@@ -365,34 +365,51 @@ class TailMarginalTransform(Transform):
     def __init__(
         self,
         features,
-        init=None,
+        pos_tail_init=None,
+        neg_tail_init=None,
     ):
         self.features = features
         super(TailMarginalTransform, self).__init__()
 
-        if init is None:
-            # init with heavy tail, otherwise heavy targets may fail to fit
-            init = torch.distributions.Uniform(0.1, 0.9).sample(
-                [features * self._output_dim_multiplier()]
-            )
+        # init with heavy tail, otherwise heavy targets may fail to fit
 
-        assert torch.Size([features * self._output_dim_multiplier()]) == init.shape
-        self._unc_params = torch.nn.parameter.Parameter(inv_sftplus(init + 1))
+        if pos_tail_init is None:
+            pos_tail_init = torch.distributions.Uniform(0.1, 0.9).sample([features])
+
+        if neg_tail_init is None:
+            neg_tail_init = torch.distributions.Uniform(0.1, 0.9).sample([features])
+
+        assert torch.Size([features]) == pos_tail_init.shape
+        assert torch.Size([features]) == neg_tail_init.shape
+
+        self._unc_pos_tail = torch.nn.parameter.Parameter(
+            inv_sftplus(pos_tail_init + 1)
+        )
+        self._unc_neg_tail = torch.nn.parameter.Parameter(
+            inv_sftplus(neg_tail_init + 1)
+        )
 
     def _output_dim_multiplier(self):
         return 2
 
     def forward(self, z, context=None):
-        return self._elementwise_forward(z, self._unc_params.repeat(z.shape[0], 1))
+        return self._elementwise_forward(
+            z,
+            self._unc_pos_tail.repeat(z.shape[0], 1),
+            self._unc_neg_tail.repeat(z.shape[0], 1),
+        )
 
     def inverse(self, z, context=None):
-        return self._elementwise_inverse(z, self._unc_params.repeat(z.shape[0], 1))
+        return self._elementwise_inverse(
+            z,
+            self._unc_pos_tail.repeat(z.shape[0], 1),
+            self._unc_neg_tail.repeat(z.shape[0], 1),
+        )
 
-    def _elementwise_forward(self, z, autoregressive_params):
+    def _elementwise_forward(self, z, _unc_pos_tail, _unc_neg_tail):
         """light -> heavy"""
-        unc_ptail, unc_ntail = self._unconstrained_params(autoregressive_params)
-        pos_tail_param = softplus(unc_ptail) - 1.0  # (-1, inf)
-        neg_tail_param = softplus(unc_ntail) - 1.0  # (-1, inf)
+        pos_tail_param = softplus(_unc_pos_tail) - 1.0  # (-1, inf)
+        neg_tail_param = softplus(_unc_neg_tail) - 1.0  # (-1, inf)
         tail_param = torch.where(z > 0, pos_tail_param, neg_tail_param)
 
         sign = torch.sign(z)
@@ -406,11 +423,10 @@ class TailMarginalTransform(Transform):
 
         return sign * x, lad.sum(axis=1)
 
-    def _elementwise_inverse(self, x, autoregressive_params):
+    def _elementwise_inverse(self, x, _unc_pos_tail, _unc_neg_tail):
         """heavy -> light"""
-        unc_ptail, unc_ntail = self._unconstrained_params(autoregressive_params)
-        pos_tail_param = softplus(unc_ptail) - 1.0  # (-1, inf)
-        neg_tail_param = softplus(unc_ntail) - 1.0  # (-1, inf)
+        pos_tail_param = softplus(_unc_pos_tail) - 1.0  # (-1, inf)
+        neg_tail_param = softplus(_unc_neg_tail) - 1.0  # (-1, inf)
         tail_param = torch.where(x > 0, pos_tail_param, neg_tail_param)
 
         # tail transform
@@ -423,15 +439,6 @@ class TailMarginalTransform(Transform):
         lad = torch.where(tail_param > 0.0, heavy_lad, light_lad)
 
         return sign * z, lad.sum(axis=1)
-
-    def _unconstrained_params(self, autoregressive_params):
-        autoregressive_params = autoregressive_params.view(
-            -1, self.features, self._output_dim_multiplier()
-        )
-        return (
-            autoregressive_params[..., 0],
-            autoregressive_params[..., 1],
-        )
 
 
 class TailAffineMarginalTransform(Transform):

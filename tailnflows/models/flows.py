@@ -216,7 +216,7 @@ class TTF_m(Flow):
         num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", None)
+        tail_init = model_kwargs.get("tail_init", (None, None))
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
         flow_depth = model_kwargs.get("flow_depth", 1)
@@ -224,7 +224,10 @@ class TTF_m(Flow):
         base_distribution = StandardNormal([dim])
 
         # set up tail transform
-        tail_transform = TailMarginalTransform(features=dim, init=tail_init)
+
+        tail_transform = TailMarginalTransform(
+            features=dim, pos_tail_init=tail_init[0], neg_tail_init=tail_init[1]
+        )
 
         if fix_tails:
             for parameter in tail_transform.parameters():
@@ -609,17 +612,17 @@ class COMET(Flow):
         tail_init = model_kwargs.get("tail_init", None)
         rotation = model_kwargs.get("rotation", False)
         fix_tails = model_kwargs.get("fix_tails", True)
-        
-        assert rotation == False, 'Rotation not implemented for COMET flow'
+
+        assert rotation == False, "Rotation not implemented for COMET flow"
 
         tail_transform = MarginalLayer(data)
 
         if fix_tails and tail_init is not None:
             assert len(tail_init) == dim
             for ix, tail_df in enumerate(tail_init):
-                if tail_df == 0.:
-                    tail_transform.tails[ix].lower_xi = 0.
-                    tail_transform.tails[ix].upper_xi = 0.
+                if tail_df == 0.0:
+                    tail_transform.tails[ix].lower_xi = 0.0
+                    tail_transform.tails[ix].upper_xi = 0.0
                 else:
                     tail_transform.tails[ix].lower_xi = 1 / tail_df
                     tail_transform.tails[ix].upper_xi = 1 / tail_df
