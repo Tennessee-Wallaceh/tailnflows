@@ -222,6 +222,7 @@ class TTF_m_hybrid(Flow):
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
         flow_depth = model_kwargs.get("flow_depth", 1)
+        nn_kwargs = configure_nn(nn_kwargs)
 
         base_distribution = StandardNormal([dim])
 
@@ -255,7 +256,7 @@ class TTF_m_hybrid(Flow):
                     num_bins=num_bins,
                     tails="linear",
                     tail_bound=tail_bound,
-                    nn_kwargs=nn_kwargs,
+                    **nn_kwargs,
                 )
             )
 

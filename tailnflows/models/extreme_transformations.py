@@ -11,7 +11,7 @@ LOW_TAIL_INIT = 0.1
 HIGH_TAIL_INIT = 0.9
 SQRT_2 = torch.sqrt(torch.tensor(2.0))
 SQRT_PI = torch.sqrt(torch.tensor(torch.pi))
-MIN_ERFC_INV = torch.tensor(1e-3)
+MIN_ERFC_INV = torch.tensor(1e-6)
 PI = torch.tensor(torch.pi)
 
 
@@ -39,8 +39,8 @@ class SpecifiedNNKwargs(TypedDict, total=True):
 
 def configure_nn(nn_kwargs: NNKwargs) -> SpecifiedNNKwargs:
     return {
-        "num_blocks": nn_kwargs.get("num_blocks", 2),
         "hidden_features": nn_kwargs.get("hidden_features", 10),
+        "num_blocks": nn_kwargs.get("num_blocks", 2),
         "context_features": nn_kwargs.get("context_features", 0),
         "use_residual_blocks": nn_kwargs.get("use_residual_blocks", True),
         "random_mask": nn_kwargs.get("random_mask", False),
@@ -633,7 +633,8 @@ class HybridTailMarginalTransform(AutoregressiveTransform):
         neg_tail_init=None,
     ):
         self.features = features
-        made = made_module.MADE(features=features, *nn_kwargs)
+        nn_kwargs["output_multiplier"] = 2
+        made = made_module.MADE(features, *nn_kwargs)
         self._epsilon = 1e-3
         super(HybridTailMarginalTransform, self).__init__(made)
 
