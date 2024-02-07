@@ -11,7 +11,7 @@ LOW_TAIL_INIT = 0.1
 HIGH_TAIL_INIT = 0.9
 SQRT_2 = torch.sqrt(torch.tensor(2.0))
 SQRT_PI = torch.sqrt(torch.tensor(torch.pi))
-MIN_ERFC_INV = torch.tensor(1e-7)
+MIN_ERFC_INV = torch.tensor(1e-3)
 PI = torch.tensor(torch.pi)
 
 
@@ -136,6 +136,10 @@ def _extreme_transform_and_lad(z, tail_param):
 
 
 def _small_erfcinv(x, tail_param):
+    """
+    Use series expansion for erfcinv(x) as x->0, using subsitution for
+    log x^-2
+    """
     log_z_sq = 2 * torch.log(1 + x * tail_param) / tail_param
 
     inner = torch.log(2 / PI) + log_z_sq
