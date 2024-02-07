@@ -4,6 +4,7 @@ from nflows.transforms.autoregressive import AutoregressiveTransform
 from nflows.transforms import made as made_module
 from nflows.transforms import Transform
 from tailnflows.models.utils import inv_sftplus
+from typing import TypedDict, Optional, Callable
 
 MAX_TAIL = 5.0
 LOW_TAIL_INIT = 0.1
@@ -11,6 +12,41 @@ HIGH_TAIL_INIT = 0.9
 SQRT_2 = torch.sqrt(torch.tensor(2.0))
 SQRT_PI = torch.sqrt(torch.tensor(torch.pi))
 MIN_ERFC_INV = torch.tensor(5e-7)
+
+
+class NNKwargs(TypedDict, total=False):
+    hidden_features: int
+    context_features: int
+    num_blocks: int
+    use_residual_blocks: int
+    random_mask: bool
+    activation: Callable
+    dropout_probability: float
+    use_batch_norm: bool
+
+
+class SpecifiedNNKwargs(TypedDict, total=True):
+    hidden_features: int
+    context_features: Optional[int]
+    num_blocks: int
+    use_residual_blocks: int
+    random_mask: bool
+    activation: Callable
+    dropout_probability: float
+    use_batch_norm: bool
+
+
+def configure_nn(nn_kwargs: NNKwargs) -> SpecifiedNNKwargs:
+    return {
+        "num_blocks": nn_kwargs.get("num_blocks", 2),
+        "hidden_features": nn_kwargs.get("hidden_features", 10),
+        "context_features": nn_kwargs.get("context_features", 0),
+        "use_residual_blocks": nn_kwargs.get("use_residual_blocks", True),
+        "random_mask": nn_kwargs.get("random_mask", False),
+        "activation": nn_kwargs.get("activation", relu),
+        "dropout_probability": nn_kwargs.get("dropout_probability", 0.0),
+        "use_batch_norm": nn_kwargs.get("use_batch_norm", False),
+    }
 
 
 class ExtremeActivation(torch.nn.Module):
@@ -360,14 +396,7 @@ class MarginalTailAutoregressiveAffineTransform(AutoregressiveTransform):
     def __init__(
         self,
         features,
-        hidden_features,
-        context_features=None,
-        num_blocks=2,
-        use_residual_blocks=True,
-        random_mask=False,
-        activation=relu,
-        dropout_probability=0.0,
-        use_batch_norm=False,
+        nn_kwargs: NNKwargs,
         fix_tails=False,
         tail_init=None,
         exnet=False,
@@ -382,7 +411,6 @@ class MarginalTailAutoregressiveAffineTransform(AutoregressiveTransform):
                 num_blocks=num_blocks,
                 output_multiplier=2,  # shift + scale
                 use_residual_blocks=use_residual_blocks,
-                random_mask=random_mask,
                 activation=activation,
                 dropout_probability=dropout_probability,
                 use_batch_norm=use_batch_norm,
@@ -395,7 +423,6 @@ class MarginalTailAutoregressiveAffineTransform(AutoregressiveTransform):
                 num_blocks=num_blocks,
                 output_multiplier=2,  # shift + scale
                 use_residual_blocks=use_residual_blocks,
-                random_mask=random_mask,
                 activation=activation,
                 dropout_probability=dropout_probability,
                 use_batch_norm=use_batch_norm,
@@ -579,29 +606,14 @@ class HybridTailMarginalTransform(AutoregressiveTransform):
     def __init__(
         self,
         features,
+        nn_kwargs,
         pos_tail_init=None,
         neg_tail_init=None,
-        hidden_features=10,
-        context_features=None,
-        num_blocks=2,
-        use_residual_blocks=True,
-        random_mask=False,
-        activation=relu,
-        dropout_probability=0.0,
-        use_batch_norm=False,
     ):
         self.features = features
         made = made_module.MADE(
             features=features,
-            hidden_features=hidden_features,
-            context_features=context_features,
-            num_blocks=num_blocks,
-            output_multiplier=2,  # shift, scale per dim
-            use_residual_blocks=use_residual_blocks,
-            random_mask=random_mask,
-            activation=activation,
-            dropout_probability=dropout_probability,
-            use_batch_norm=use_batch_norm,
+            *nn_kwargs
         )
         self._epsilon = 1e-3
         super(HybridTailMarginalTransform, self).__init__(made)

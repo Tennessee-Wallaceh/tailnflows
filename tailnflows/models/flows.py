@@ -17,16 +17,16 @@ from nflows.transforms import Permutation
 
 # custom modules
 from tailnflows.models.extreme_transformations import (
+    configure_nn,
+    NNKwargs,
     MaskedTailAutoregressiveTransform,
     flip,
-    MaskedExtremeAutoregressiveTransform,
     TailMarginalTransform,
     CopulaMarginalTransform,
     HybridTailMarginalTransform,
 )
 from tailnflows.models.base_distribution import TrainableStudentT, NormalStudentTJoint
 from marginal_tail_adaptive_flows.utils.tail_permutation import (
-    TailRandomPermutation,
     TailLU,
 )
 from tailnflows.models.utils import Softplus
@@ -57,8 +57,6 @@ ModelUse = Enum("ModelUse", ["density_estimation", "variational_inference"])
 
 
 class ModelKwargs(TypedDict, total=False):
-    hidden_layer_size: Optional[int]
-    num_hidden_layers: Optional[int]
     tail_bound: Optional[float]
     num_bins: Optional[int]
     tail_init: Optional[float]
@@ -74,8 +72,6 @@ ModelName = Enum(
         "TTF",
         "TTF_m",
         "TTF_m_hybrid",
-        "EXF",
-        "EXF_m",
         "RQS",
         "gTAF",
         "mTAF",
@@ -92,10 +88,9 @@ class TTF(Flow):
         dim: int,
         use: ModelUse = ModelUse.density_estimation,
         model_kwargs: ModelKwargs = {},
+        nn_kwargs: NNKwargs = {},
         domain: Optional[Domain] = None,
     ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
         rotation = model_kwargs.get("rotation", True)
@@ -105,7 +100,8 @@ class TTF(Flow):
         # autoregressive (fast) in forward (target -> latent) direction
         transforms = [
             MaskedTailAutoregressiveTransform(
-                features=dim, hidden_features=hidden_layer_size, num_blocks=2
+                features=dim,
+                nn_kwargs=nn_kwargs,
             )
         ]
 
@@ -121,11 +117,10 @@ class TTF(Flow):
         transforms.append(
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
                 num_bins=num_bins,
                 tails="linear",
                 tail_bound=tail_bound,
+                nn_kwargs=nn_kwargs,
             )  # type: ignore
         )
 
@@ -147,25 +142,33 @@ class TTF_m(Flow):
         dim: int,
         use: ModelUse = ModelUse.density_estimation,
         model_kwargs: ModelKwargs = {},
+        nn_kwargs: NNKwargs = {},
     ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
+        # configure default settings
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", (None, None))
+        pos_tail_init = model_kwargs.get("pos_tail_init", None)
+        neg_tail_init = model_kwargs.get("neg_tail_init", None)
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
         flow_depth = model_kwargs.get("flow_depth", 1)
+        nn_kwargs = configure_nn(nn_kwargs)
 
+        # base distributin
         base_distribution = StandardNormal([dim])
 
         # set up tail transform
-
         tail_transform = TailMarginalTransform(
-            features=dim, pos_tail_init=tail_init[0], neg_tail_init=tail_init[1]
+            features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
         )
 
         if fix_tails:
+            assert (
+                pos_tail_init is not None
+            ), "Fixing tails, but no init provided for pos tails"
+            assert (
+                neg_tail_init is not None
+            ), "Fixing tails, but no init provided for neg tails"
             for parameter in tail_transform.parameters():
                 parameter.requires_grad = False
 
@@ -175,26 +178,23 @@ class TTF_m(Flow):
             # a strictly lightening transformation
             tail_transform = flip(tail_transform)
 
+        # add the rest of the transformations
         transforms = [tail_transform]
-
         for _ in range(flow_depth):
             if rotation:
                 transforms.append(LULinear(features=dim))
 
             transforms.append(
-                MaskedAffineAutoregressiveTransform(
-                    features=dim, hidden_features=dim * 2, num_blocks=2
-                )
+                MaskedAffineAutoregressiveTransform(features=dim, **nn_kwargs)
             )
 
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                     features=dim,
-                    hidden_features=hidden_layer_size,
-                    num_blocks=num_hidden_layers,
                     num_bins=num_bins,
                     tails="linear",
                     tail_bound=tail_bound,
+                    **nn_kwargs,
                 )
             )
 
@@ -213,12 +213,12 @@ class TTF_m_hybrid(Flow):
         dim: int,
         use: ModelUse = ModelUse.density_estimation,
         model_kwargs: ModelKwargs = {},
+        nn_kwargs: NNKwargs = {},
     ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", (None, None))
+        pos_tail_init = model_kwargs.get("pos_tail_init", None)
+        neg_tail_init = model_kwargs.get("neg_tail_init", None)
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
         flow_depth = model_kwargs.get("flow_depth", 1)
@@ -228,10 +228,9 @@ class TTF_m_hybrid(Flow):
         # set up tail transform
         tail_transform = HybridTailMarginalTransform(
             features=dim,
-            pos_tail_init=tail_init[0],
-            neg_tail_init=tail_init[1],
-            hidden_features=dim * 2,
-            num_blocks=2,
+            pos_tail_init=pos_tail_init,
+            neg_tail_init=neg_tail_init,
+            nn_kwargs=nn_kwargs,
         )
 
         if fix_tails:
@@ -253,11 +252,10 @@ class TTF_m_hybrid(Flow):
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                     features=dim,
-                    hidden_features=hidden_layer_size,
-                    num_blocks=num_hidden_layers,
                     num_bins=num_bins,
                     tails="linear",
                     tail_bound=tail_bound,
+                    nn_kwargs=nn_kwargs,
                 )
             )
 
@@ -306,125 +304,6 @@ class Copula_m(Flow):
         super().__init__(
             transform=CompositeTransform(transforms),
             distribution=BoxUniform(low=-torch.ones(dim), high=torch.ones(dim)),
-        )
-
-
-class EXF(Flow):
-    """
-    Base distribution: Guassian
-    Transformation (base->target):
-        - RQS
-        - (optional) LU rotation
-        - Autoregressive extreme transformation (no sub-pareto tails)
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-    ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        rotation = model_kwargs.get("rotation", True)
-
-        base_distribution = StandardNormal([dim])
-        transforms = [
-            MaskedExtremeAutoregressiveTransform(
-                features=dim, hidden_features=dim * 2, num_blocks=2
-            )
-        ]
-
-        if use == ModelUse.density_estimation:
-            # if using for density estimation, the tail transformation needs to be flipped
-            # this keeps the autoregression in the data->noise direction, but means data->noise is
-            # a strictly lightening transformation
-            transforms[0] = flip(transforms[0])
-
-        if rotation:
-            transforms += [LULinear(features=dim)]
-
-        transforms += [
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
-            ),
-        ]
-
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
-
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=base_distribution,
-        )
-
-
-class EXF_m(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-    ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        rotation = model_kwargs.get("rotation", True)
-        fix_tails = model_kwargs.get("fix_tails", True)
-        tail_init = model_kwargs.get("tail_init", {"pos": None, "neg": None})
-
-        assert isinstance(tail_init, dict), "tail_init for extreme flow must be dict"
-
-        base_distribution = StandardNormal([dim])
-        transforms = [
-            EXMarginalTransform(
-                features=dim,
-                pos_tail_init=tail_init["pos"],
-                neg_tail_init=tail_init["neg"],
-            ),
-            MaskedAffineAutoregressiveTransform(
-                features=dim, hidden_features=dim * 2, num_blocks=2
-            ),
-        ]
-
-        if fix_tails:
-            for parameter in transforms[0].parameters():
-                parameter.requires_grad = False
-
-        if use == ModelUse.density_estimation:
-            # if using for density estimation, the tail transformation needs to be flipped
-            # this keeps the autoregression in the data->noise direction, but means data->noise is
-            # a strictly lightening transformation
-            transforms[0] = flip(transforms[0])
-
-        if rotation:
-            transforms.append(LULinear(features=dim))
-
-        transforms += [
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
-            )
-        ]
-
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
-
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=base_distribution,
         )
 
 
@@ -661,9 +540,7 @@ class COMET(Flow):
 # map model names to appropriate class
 models: dict[ModelName, Type[Flow]] = {
     ModelName.TTF: TTF,
-    ModelName.EXF: EXF,
     ModelName.TTF_m: TTF_m,
-    ModelName.EXF_m: EXF_m,
     ModelName.RQS: RQS,
     ModelName.gTAF: gTAF,
     ModelName.mTAF: mTAF,
