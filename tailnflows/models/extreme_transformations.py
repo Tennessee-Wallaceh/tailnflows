@@ -156,7 +156,7 @@ def _extreme_inverse_and_lad(x, tail_param):
     erfcinv_val = torch.where(
         g > MIN_ERFC_INV,
         _erfcinv(g),
-        _small_erfcinv(x, tail_param),
+        torch.where(g > MIN_ERFC_INV, 1e6, x),
     )
 
     z = SQRT_2 * erfcinv_val
