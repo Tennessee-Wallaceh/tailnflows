@@ -1,1 +1,1 @@
-from .comet_models import COMETFlow, MarginalLayer
+from .comet_models import MarginalLayer
