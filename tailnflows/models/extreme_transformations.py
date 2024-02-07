@@ -12,6 +12,7 @@ HIGH_TAIL_INIT = 0.9
 SQRT_2 = torch.sqrt(torch.tensor(2.0))
 SQRT_PI = torch.sqrt(torch.tensor(torch.pi))
 MIN_ERFC_INV = torch.tensor(5e-7)
+PI = torch.tensor(torch.pi)
 
 
 class NNKwargs(TypedDict, total=False):
@@ -102,8 +103,8 @@ class ExtremeNetwork(torch.nn.Module):
 
 
 def _erfcinv(x):
-    # with torch.no_grad():
-    #     x = torch.clamp(x, min=MIN_ERFC_INV)
+    with torch.no_grad():
+        x = torch.clamp(x, min=MIN_ERFC_INV)
     return -torch.special.ndtri(0.5 * x) / SQRT_2
 
 
@@ -134,13 +135,30 @@ def _extreme_transform_and_lad(z, tail_param):
     return x, lad
 
 
+def _small_erfcinv(x, tail_param):
+    log_z_sq = 2 * torch.log(1 + x * tail_param) / tail_param
+
+    inner = torch.log(2 / PI) + log_z_sq
+    inner -= (torch.log(2 / PI) + log_z_sq).log()
+
+    z = inner.pow(0.5) / SQRT_2
+
+    return z
+
+
 def _extreme_inverse_and_lad(x, tail_param):
     inner = 1 + tail_param * x
     g = torch.pow(inner, -1 / tail_param)
-    z = SQRT_2 * _erfcinv(g)
+    erfcinv_val = torch.where(
+        g > MIN_ERFC_INV,
+        _erfcinv(g),
+        _small_erfcinv(x, tail_param),
+    )
+
+    z = SQRT_2 * erfcinv_val
 
     lad = (-1 - 1 / tail_param) * torch.log(inner)
-    lad += torch.square(_erfcinv(g))
+    lad += torch.square(erfcinv_val)
     lad += torch.log(SQRT_PI / SQRT_2)
 
     return z, lad
@@ -611,10 +629,7 @@ class HybridTailMarginalTransform(AutoregressiveTransform):
         neg_tail_init=None,
     ):
         self.features = features
-        made = made_module.MADE(
-            features=features,
-            *nn_kwargs
-        )
+        made = made_module.MADE(features=features, *nn_kwargs)
         self._epsilon = 1e-3
         super(HybridTailMarginalTransform, self).__init__(made)
 
