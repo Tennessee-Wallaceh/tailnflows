@@ -156,7 +156,7 @@ def _extreme_inverse_and_lad(x, tail_param):
     erfcinv_val = torch.where(
         g > MIN_ERFC_INV,
         _erfcinv(g),
-        torch.where(g > MIN_ERFC_INV, 1e6, x),
+        _small_erfcinv(torch.where(g > MIN_ERFC_INV, 1e6, x), tail_param),
     )
 
     z = SQRT_2 * erfcinv_val
@@ -168,7 +168,7 @@ def _extreme_inverse_and_lad(x, tail_param):
     return z, lad
 
 
-def _tail_affine_forward(z, pos_tail, neg_tail, shift, scale):
+def _tail_affine_transform(z, pos_tail, neg_tail, shift, scale):
     sign = torch.sign(z)
     tail_param = torch.where(z > 0, pos_tail, neg_tail)
     x, lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
@@ -633,8 +633,9 @@ class HybridTailMarginalTransform(AutoregressiveTransform):
         neg_tail_init=None,
     ):
         self.features = features
-        nn_kwargs["output_multiplier"] = 2
-        made = made_module.MADE(features, *nn_kwargs)
+
+        made = made_module.MADE(features=features, output_multiplier=2, **nn_kwargs)
+
         self._epsilon = 1e-3
         super(HybridTailMarginalTransform, self).__init__(made)
 
@@ -649,10 +650,10 @@ class HybridTailMarginalTransform(AutoregressiveTransform):
         assert torch.Size([features]) == neg_tail_init.shape
 
         self._unc_pos_tail = torch.nn.parameter.Parameter(
-            inv_sftplus(pos_tail_init + 1), requires_grad=True
+            inv_sftplus(pos_tail_init), requires_grad=True
         )
         self._unc_neg_tail = torch.nn.parameter.Parameter(
-            inv_sftplus(neg_tail_init + 1), requires_grad=True
+            inv_sftplus(neg_tail_init), requires_grad=True
         )
 
     def _elementwise_forward(self, z, autoregressive_params):
@@ -660,8 +661,8 @@ class HybridTailMarginalTransform(AutoregressiveTransform):
         unc_scale, shift = self._unconstrained_params(autoregressive_params)
         scale = softplus(unc_scale)
 
-        pos_tail_param = softplus(self._unc_pos_tail) - 1.0  # (-1, inf)
-        neg_tail_param = softplus(self._unc_neg_tail) - 1.0  # (-1, inf)
+        pos_tail_param = softplus(self._unc_pos_tail)
+        neg_tail_param = softplus(self._unc_neg_tail)
 
         x, lad = _tail_affine_transform(z, pos_tail_param, neg_tail_param, shift, scale)
 
@@ -672,8 +673,8 @@ class HybridTailMarginalTransform(AutoregressiveTransform):
         unc_scale, shift = self._unconstrained_params(autoregressive_params)
         scale = softplus(unc_scale)
 
-        pos_tail_param = softplus(self._unc_pos_tail) - 1.0  # (-1, inf)
-        neg_tail_param = softplus(self._unc_neg_tail) - 1.0  # (-1, inf)
+        pos_tail_param = softplus(self._unc_pos_tail)
+        neg_tail_param = softplus(self._unc_neg_tail)
 
         z, lad = _tail_affine_inverse(x, pos_tail_param, neg_tail_param, shift, scale)
 
