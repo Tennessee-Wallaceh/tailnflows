@@ -153,11 +153,11 @@ def _small_erfcinv(x, tail_param):
 def _extreme_inverse_and_lad(x, tail_param):
     inner = 1 + tail_param * x
     g = torch.pow(inner, -1 / tail_param)
-    erfcinv_val = torch.where(
-        g > MIN_ERFC_INV,
-        _erfcinv(g),
-        _small_erfcinv(torch.where(g > MIN_ERFC_INV, 1e6, x), tail_param),
-    )
+    stable_g = g > MIN_ERFC_INV
+
+    erfcinv_val = torch.zeros_like(x)
+    erfcinv_val[stable_g] = _erfcinv(g[stable_g])
+    erfcinv_val[~stable_g] = _small_erfcinv(x[~stable_g], tail_param)
 
     z = SQRT_2 * erfcinv_val
 
@@ -173,7 +173,7 @@ def _tail_affine_transform(z, pos_tail, neg_tail, shift, scale):
     tail_param = torch.where(z > 0, pos_tail, neg_tail)
     x, lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
     lad += torch.log(scale)
-    return sign * x * scale + shift, lad.sum(axis=1)
+    return sign * x * scale + shift, lad
 
 
 def _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale):
@@ -187,7 +187,7 @@ def _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale):
     z, lad = _extreme_inverse_and_lad(torch.abs(x), torch.abs(tail_param))
 
     lad -= torch.log(scale)
-    return sign * z, lad.sum(axis=1)
+    return sign * z, lad
 
 
 def _tail_forward(z, pos_tail, neg_tail):
