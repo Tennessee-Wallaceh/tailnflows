@@ -20,6 +20,7 @@ from tailnflows.models.extreme_transformations import (
     configure_nn,
     NNKwargs,
     MaskedTailAutoregressiveTransform,
+    TailAffineMarginalTransform,
     flip,
     TailMarginalTransform,
     CopulaMarginalTransform,
@@ -152,15 +153,21 @@ class TTF_m(Flow):
         rotation = model_kwargs.get("rotation", True)
         fix_tails = model_kwargs.get("fix_tails", True)
         flow_depth = model_kwargs.get("flow_depth", 1)
+        final_affine = model_kwargs.get("final_affine", False)
         nn_kwargs = configure_nn(nn_kwargs)
 
         # base distributin
         base_distribution = StandardNormal([dim])
 
         # set up tail transform
-        tail_transform = TailMarginalTransform(
-            features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
-        )
+        if final_affine:
+            tail_transform = TailAffineMarginalTransform(
+                features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
+            )
+        else:
+            tail_transform = TailMarginalTransform(
+                features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
+            )
 
         if fix_tails:
             assert (

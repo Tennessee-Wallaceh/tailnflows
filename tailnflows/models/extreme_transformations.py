@@ -157,7 +157,7 @@ def _extreme_inverse_and_lad(x, tail_param):
 
     erfcinv_val = torch.zeros_like(x)
     erfcinv_val[stable_g] = _erfcinv(g[stable_g])
-    erfcinv_val[~stable_g] = _small_erfcinv(x[~stable_g], tail_param)
+    erfcinv_val[~stable_g] = _small_erfcinv(x[~stable_g], tail_param[~stable_g])
 
     z = SQRT_2 * erfcinv_val
 
@@ -330,43 +330,29 @@ class TailAffineMarginalTransform(Transform):
         assert torch.Size([features]) == scale_init.shape
 
         # convert to unconstrained versions
-        self._unc_pos_tail_params = torch.nn.parameter.Parameter(
-            inv_sftplus(pos_tail_init)
-        )
-        self._unc_neg_tail_params = torch.nn.parameter.Parameter(
-            inv_sftplus(neg_tail_init)
-        )
+        self._unc_pos_tail = torch.nn.parameter.Parameter(inv_sftplus(pos_tail_init))
+        self._unc_neg_tail = torch.nn.parameter.Parameter(inv_sftplus(neg_tail_init))
         self._unc_shift = torch.nn.parameter.Parameter(shift_init)
         self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init))
 
     def forward(self, z, context=None):
-        tail_param = torch.where(
-            z > 0, softplus(self._unc_pos_tail), softplus(self._unc_neg_tail)
-        )
+        pos_tail = softplus(self._unc_pos_tail)
+        neg_tail = softplus(self._unc_neg_tail)
         shift = self._unc_shift
         scale = softplus(self._unc_scale)
 
-        sign = torch.sign(z)
-        x, lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
-        lad += torch.log(scale)
-
-        return sign * x * scale + shift, lad.sum(axis=1)
+        x, lad = _tail_affine_transform(z, pos_tail, neg_tail, shift, scale)
+        return x, lad.sum(axis=1)
 
     def inverse(self, x, context=None):
         """heavy -> light"""
+        pos_tail = softplus(self._unc_pos_tail)
+        neg_tail = softplus(self._unc_neg_tail)
         shift = self._unc_shift
         scale = softplus(self._unc_scale)
 
-        x = (x - shift) / scale  # affine
-
-        # tail transform
-        sign = torch.sign(x)
-        tail_param = torch.where(
-            x > 0, softplus(self._unc_pos_tail), softplus(self._unc_neg_tail)
-        )
-        z, lad = _extreme_inverse_and_lad(torch.abs(x), tail_param)
-        lad -= torch.log(scale)
-        return sign * z, lad.sum(axis=1)
+        z, lad = _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale)
+        return z, lad.sum(axis=1)
 
 
 class CopulaMarginalTransform(Transform):
