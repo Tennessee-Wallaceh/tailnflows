@@ -1,0 +1,11 @@
+torch==1.13.1
+jupyter
+matplotlib
+numpy
+scipy
+tqdm
+pandas
+seaborn
+posteriordb
+git+https://github.com/Tennessee-Wallaceh/nflows
+git+https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow.git
