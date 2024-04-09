@@ -54,6 +54,11 @@ def _get_intial_permutation(degrees_of_freedom):
     return permutation, rearranged_dfs.squeeze()
 
 
+def _df_to_tailp(dfs):
+    # changes degrees of freedom to tail parameters
+    return torch.tensor([1 / df if df > 0 else 1e-4 for df in dfs])
+
+
 ModelUse = Enum("ModelUse", ["density_estimation", "variational_inference"])
 
 
@@ -78,7 +83,6 @@ ModelName = Enum(
         "mTAF",
         "COMET",
         "Copula_m",
-        "TailOnly",
     ],
 )
 
@@ -188,7 +192,7 @@ class TTF_m(Flow):
 
         # add the rest of the transformations
         transforms = [tail_transform]
-        if flow_depth = 0 and rotation: # still add rotation
+        if flow_depth == 0 and rotation:  # still add rotation
             transforms.append(LULinear(features=dim))
 
         for _ in range(flow_depth):
@@ -208,65 +212,6 @@ class TTF_m(Flow):
                     **nn_kwargs,
                 )
             )
-
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
-
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=base_distribution,
-        )
-
-
-class TailOnly(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-        nn_kwargs: NNKwargs = {},
-    ):
-        # configure default settings
-        pos_tail_init = model_kwargs.get("pos_tail_init", None)
-        neg_tail_init = model_kwargs.get("neg_tail_init", None)
-        rotation = model_kwargs.get("rotation", True)
-        fix_tails = model_kwargs.get("fix_tails", True)
-        final_affine = model_kwargs.get("final_affine", False)
-        nn_kwargs = configure_nn(nn_kwargs)
-
-        # base distributin
-        base_distribution = StandardNormal([dim])
-
-        # set up tail transform
-        if final_affine:
-            tail_transform = TailAffineMarginalTransform(
-                features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
-            )
-        else:
-            tail_transform = TailMarginalTransform(
-                features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
-            )
-
-        if fix_tails:
-            assert (
-                pos_tail_init is not None
-            ), "Fixing tails, but no init provided for pos tails"
-            assert (
-                neg_tail_init is not None
-            ), "Fixing tails, but no init provided for neg tails"
-            for parameter in tail_transform.parameters():
-                parameter.requires_grad = False
-
-        if use == ModelUse.density_estimation:
-            # if using for density estimation, the tail transformation needs to be flipped
-            # this keeps the autoregression in the data->noise direction, but means data->noise is
-            # a strictly lightening transformation
-            tail_transform = flip(tail_transform)
-
-        # add the rest of the transformations
-        transforms = [tail_transform]
-        if rotation:
-            transforms.append(LULinear(features=dim))
 
         if use == ModelUse.variational_inference:
             transforms = [InverseTransform(transform) for transform in transforms]
@@ -618,7 +563,6 @@ models: dict[ModelName, Type[Flow]] = {
     ModelName.COMET: COMET,
     ModelName.Copula_m: Copula_m,
     ModelName.TTF_m_hybrid: TTF_m_hybrid,
-    ModelName.TailOnly: TailOnly,
 }
 
 
