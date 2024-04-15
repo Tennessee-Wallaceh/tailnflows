@@ -14,6 +14,7 @@ pip_dependencies = [
     "pandas",
     "seaborn",
     "posteriordb",
+    "jaxtyping",
     "git+https://github.com/Tennessee-Wallaceh/nflows",
     "git+https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow.git",
 ]
