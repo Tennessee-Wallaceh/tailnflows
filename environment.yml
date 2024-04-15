@@ -10,8 +10,9 @@ dependencies:
   - scipy
   - tqdm
   - pandas
+  - seaborn
   - pip>=3.0.0
   - pip:
     - posteriordb
     - git+https://github.com/Tennessee-Wallaceh/nflows
-    - flowtorch==0.5
+    - git+https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow.git

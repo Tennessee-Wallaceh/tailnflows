@@ -2,6 +2,10 @@ import torch
 import matplotlib.pyplot as plt
 
 
+def smooth(path, w=10):
+    return (np.arange(w - 1, len(path)), np.convolve(path, np.ones(w), "valid") / w)
+
+
 def plot_contour(
     ax,
     target,

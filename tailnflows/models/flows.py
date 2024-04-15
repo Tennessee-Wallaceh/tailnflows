@@ -98,6 +98,7 @@ class TTF(Flow):
         domain: Optional[Domain] = None,
     ):
         tail_bound = model_kwargs.get("tail_bound", 2.5)
+        condition_dim = model_kwargs.get("condition_dim", None)
         num_bins = model_kwargs.get("num_bins", 8)
         rotation = model_kwargs.get("rotation", True)
 
@@ -123,6 +124,7 @@ class TTF(Flow):
         transforms.append(
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim,
+                context_features=condition_dim,
                 num_bins=num_bins,
                 tails="linear",
                 tail_bound=tail_bound,
@@ -156,9 +158,10 @@ class TTF_m(Flow):
         pos_tail_init = model_kwargs.get("pos_tail_init", None)
         neg_tail_init = model_kwargs.get("neg_tail_init", None)
         rotation = model_kwargs.get("rotation", True)
-        fix_tails = model_kwargs.get("fix_tails", True)
+        fix_tails = model_kwargs.get("fix_tails", False)
         flow_depth = model_kwargs.get("flow_depth", 1)
         final_affine = model_kwargs.get("final_affine", False)
+        condition_dim = model_kwargs.get("condition_dim", None)
         nn_kwargs = configure_nn(nn_kwargs)
 
         # base distributin
@@ -200,12 +203,15 @@ class TTF_m(Flow):
                 transforms.append(LULinear(features=dim))
 
             transforms.append(
-                MaskedAffineAutoregressiveTransform(features=dim, **nn_kwargs)
+                MaskedAffineAutoregressiveTransform(
+                    features=dim, context_features=condition_dim, **nn_kwargs
+                )
             )
 
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                     features=dim,
+                    context_features=condition_dim,
                     num_bins=num_bins,
                     tails="linear",
                     tail_bound=tail_bound,
@@ -329,32 +335,37 @@ class RQS(Flow):
         dim: int,
         use: ModelUse = ModelUse.density_estimation,
         model_kwargs: ModelKwargs = {},
+        nn_kwargs: NNKwargs = {},
     ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
+        condition_dim = model_kwargs.get("condition_dim", None)
         rotation = model_kwargs.get("rotation", True)
+        flow_depth = model_kwargs.get("flow_depth", 1)
+        condition_dim = model_kwargs.get("condition_dim", None)
+        nn_kwargs = configure_nn(nn_kwargs)
 
-        transforms = [
-            MaskedAffineAutoregressiveTransform(
-                features=dim, hidden_features=dim * 2, num_blocks=2
+        transforms = []
+        for _ in range(flow_depth):
+            if rotation:
+                transforms.append(LULinear(features=dim))
+
+            transforms.append(
+                MaskedAffineAutoregressiveTransform(
+                    features=dim, context_features=condition_dim, **nn_kwargs
+                )
             )
-        ]
 
-        if rotation:
-            transforms.append(LULinear(features=dim))
-
-        transforms.append(
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
+            transforms.append(
+                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
+                    features=dim,
+                    context_features=condition_dim,
+                    num_bins=num_bins,
+                    tails="linear",
+                    tail_bound=tail_bound,
+                    **nn_kwargs,
+                )
             )
-        )
 
         if use == ModelUse.variational_inference:
             transforms = [InverseTransform(transform) for transform in transforms]
@@ -371,39 +382,39 @@ class gTAF(Flow):
         dim: int,
         use: ModelUse = ModelUse.density_estimation,
         model_kwargs: ModelKwargs = {},
+        nn_kwargs: NNKwargs = {},
     ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
         tail_bound = model_kwargs.get("tail_bound", 2.5)
         num_bins = model_kwargs.get("num_bins", 8)
         tail_init = model_kwargs.get("tail_init", None)
         rotation = model_kwargs.get("rotation", True)
-        nn_activation = model_kwargs.get("nn_activation", torch.nn.functional.relu)
+        flow_depth = model_kwargs.get("flow_depth", 1)
+        condition_dim = model_kwargs.get("condition_dim", None)
+        nn_kwargs = configure_nn(nn_kwargs)
 
         base_dist = TrainableStudentT(dim, init=tail_init)
 
-        if rotation:
-            transforms = [LULinear(features=dim)]
-        else:
-            transforms = []
+        transforms = []
+        for _ in range(flow_depth):
+            if rotation:
+                transforms.append(LULinear(features=dim))
 
-        transforms += [
-            MaskedAffineAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-                activation=nn_activation,
-            ),
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
-                activation=nn_activation,
-            ),
-        ]
+            transforms.append(
+                MaskedAffineAutoregressiveTransform(
+                    features=dim, context_features=condition_dim, **nn_kwargs
+                )
+            )
+
+            transforms.append(
+                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
+                    features=dim,
+                    context_features=condition_dim,
+                    num_bins=num_bins,
+                    tails="linear",
+                    tail_bound=tail_bound,
+                    **nn_kwargs,
+                )
+            )
 
         # all transformations are reversible
         if use == ModelUse.variational_inference:
