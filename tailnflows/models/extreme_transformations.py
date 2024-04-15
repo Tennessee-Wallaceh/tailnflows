@@ -41,7 +41,6 @@ def configure_nn(nn_kwargs: NNKwargs) -> SpecifiedNNKwargs:
     return {
         "hidden_features": nn_kwargs.get("hidden_features", 10),
         "num_blocks": nn_kwargs.get("num_blocks", 2),
-        "context_features": nn_kwargs.get("context_features", 0),
         "use_residual_blocks": nn_kwargs.get("use_residual_blocks", True),
         "random_mask": nn_kwargs.get("random_mask", False),
         "activation": nn_kwargs.get("activation", relu),
@@ -236,6 +235,20 @@ def _sinh_asinh_inverse_and_lad(x, kurtosis_param):
     return z, lad
 
 
+def _asymmetric_scale_transform_and_lad(z, pos_scale, neg_scale):
+    sq_plus_1 = (z.square() + 1.0).sqrt()
+    a = pos_scale + neg_scale
+    b = pos_scale - neg_scale
+
+    pos_x = pos_scale * (sq_plus_1 + z)
+    neg_x = neg_scale * (z - sq_plus_1)
+    x = 0.5 * (pos_x + neg_x - b)
+
+    lad = torch.log1p((b / a) * (z / sq_plus_1))
+    lad += torch.log(a) - torch.log(torch.tensor(2.0))
+    return x, lad
+
+
 def flip(transform):
     """
     if it is an autoregressive transform change around the element wise transform,
@@ -353,6 +366,78 @@ class TailAffineMarginalTransform(Transform):
 
         z, lad = _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale)
         return z, lad.sum(axis=1)
+
+
+class TailScaleShiftMarginalTransform(Transform):
+    """
+    A two tail scale version of the tail and scale transform.
+    """
+
+    def __init__(
+        self,
+        features,
+        pos_tail_init=None,
+        neg_tail_init=None,
+        shift_init=None,
+        pos_scale_init=None,
+        neg_scale_init=None,
+    ):
+        self.features = features
+        super(TailScaleShiftMarginalTransform, self).__init__()
+
+        # random inits if needed
+        if pos_tail_init is None:
+            pos_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample([features])
+
+        if neg_tail_init is None:
+            neg_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample([features])
+
+        if shift_init is None:
+            shift_init = torch.distributions.Normal(0.0, 1).sample([features])
+
+        if pos_scale_init is None:
+            pos_scale_init = softplus(
+                torch.distributions.Normal(1.0, 1).sample([features])
+            )
+
+        if neg_scale_init is None:
+            neg_scale_init = softplus(
+                torch.distributions.Normal(1.0, 1).sample([features])
+            )
+
+        assert torch.Size([features]) == pos_tail_init.shape
+        assert torch.Size([features]) == neg_tail_init.shape
+        assert torch.Size([features]) == shift_init.shape
+        assert torch.Size([features]) == pos_scale_init.shape
+        assert torch.Size([features]) == neg_scale_init.shape
+
+        # convert to unconstrained versions
+        self._unc_pos_tail = torch.nn.parameter.Parameter(inv_sftplus(pos_tail_init))
+        self._unc_neg_tail = torch.nn.parameter.Parameter(inv_sftplus(neg_tail_init))
+        self._unc_shift = torch.nn.parameter.Parameter(shift_init)
+        self._unc_pos_scale = torch.nn.parameter.Parameter(inv_sftplus(pos_scale_init))
+        self._unc_neg_scale = torch.nn.parameter.Parameter(inv_sftplus(neg_scale_init))
+
+    def forward(self, z, context=None):
+        pos_tail = softplus(self._unc_pos_tail)
+        neg_tail = softplus(self._unc_neg_tail)
+        shift = self._unc_shift
+        pos_scale = softplus(self._unc_pos_scale)
+        neg_scale = softplus(self._unc_neg_scale)
+
+        tail_x, lad = _tail_forward(z, pos_tail, neg_tail)
+        x, lad = _asymmetric_scale_transform_and_lad(tail_x, pos_scale, neg_scale)
+        x += shift
+
+        return x, lad.sum(axis=1)
+
+    def inverse(self, x, context=None):
+        """heavy -> light"""
+        raise NotImplementedError()
 
 
 class CopulaMarginalTransform(Transform):
