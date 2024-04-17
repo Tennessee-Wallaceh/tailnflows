@@ -332,10 +332,10 @@ class TailAffineMarginalTransform(Transform):
             ).sample([features])
 
         if shift_init is None:
-            shift_init = torch.distributions.Normal(0.0, 1).sample([features])
+            shift_init = torch.zeros([features])
 
         if scale_init is None:
-            scale_init = softplus(torch.distributions.Normal(1.0, 1).sample([features]))
+            scale_init = inv_sftplus(torch.ones([features]))
 
         assert torch.Size([features]) == pos_tail_init.shape
         assert torch.Size([features]) == neg_tail_init.shape

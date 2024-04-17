@@ -39,4 +39,4 @@ def load_return_data(top_n_symbols):
         else:
             joined_data = joined_data.join(new_data)
 
-    return joined_data[wanted_symbols]
+    return joined_data[wanted_symbols], wanted_symbols

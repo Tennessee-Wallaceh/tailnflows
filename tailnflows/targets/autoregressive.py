@@ -28,7 +28,7 @@ class ARParams:
 class PredictiveARParams(ARParams):
     # Includes additional 'predictive' samples treated as parameters
     pred_length: int
-    predictive_samples: Float[Tensor, "param_dim obs_dim*pred_length"]
+    predictive_samples: Float[Tensor, "param_dim obs_dim pred_length"]
 
 
 def from_vector(
@@ -57,6 +57,42 @@ def from_vector(
         predictive_samples=predictive_samples,
         betas=betas,
         obs_df=base_ar_parameters.obs_df,
+        obs_scale=base_ar_parameters.obs_scale,
+        prior_df=base_ar_parameters.prior_df,
+        prior_scale=base_ar_parameters.prior_scale,
+    )
+
+
+def from_vector_df(
+    parameters: Float[Tensor, "param_dim (obs_dim*obs_dim*ar_length)+pred_length+1"],
+    pred_length: int,
+    base_ar_parameters: ARParams,
+) -> PredictiveARParams:
+    """
+    Converts vector for beta and predictive samples into AR params.
+    This also includes the degrees of freedom.
+    """
+    obs_dim = base_ar_parameters.obs_dim
+    ar_length = base_ar_parameters.ar_length
+    raw_beta_dim = obs_dim * obs_dim * ar_length
+    raw_param_dim = raw_beta_dim + pred_length * obs_dim + 1
+    assert (
+        parameters.shape[1] == raw_param_dim
+    ), f"Unconstrained params don't have correct dimension. {parameters.shape} vs [param_dim ar_length+pred_length]"
+
+    betas = parameters[:, :raw_beta_dim].reshape(-1, obs_dim, obs_dim, ar_length)
+    predictive_samples = parameters[:, raw_beta_dim:-1].reshape(
+        -1, obs_dim, pred_length
+    )
+    df = 0.5 + torch.exp(parameters[:, [-1]])
+
+    return PredictiveARParams(
+        ar_length=ar_length,
+        obs_dim=obs_dim,
+        pred_length=pred_length,
+        predictive_samples=predictive_samples,
+        betas=betas,
+        obs_df=df,
         obs_scale=base_ar_parameters.obs_scale,
         prior_df=base_ar_parameters.prior_df,
         prior_scale=base_ar_parameters.prior_scale,
@@ -96,12 +132,10 @@ def beta_log_prior(params: ARParams):
     return ll_values.sum(axis=[1, 2, 3])
 
 
-# def obs_df_log_prior(params: ARParams):
-#     prior_dist = torch.distributions.StudentT(
-#         df=params.prior_df, loc=0.0, scale=params.prior_scale
-#     )
-#     ll_values = prior_dist.log_prob(params.betas) # [param_dim]
-#     return ll_values.sum(axis=1)
+def obs_df_log_prior(params: ARParams):
+    prior_dist = torch.distributions.Gamma(2.0, 0.5)
+    ll_values = prior_dist.log_prob(params.obs_df)  # [param_dim]
+    return ll_values.sum(axis=1)
 
 
 def get_predictive_ll(pred_input: Float[Tensor, "1 obs_dim ar_length"]):
@@ -136,30 +170,6 @@ def get_predictive_ll(pred_input: Float[Tensor, "1 obs_dim ar_length"]):
         return pred_ll
 
     return _pred_ll
-
-
-def build_ar_params_df_inference(
-    parameters: Float[Tensor, "param_dim ar_length+pred_length+1"],
-    pred_length: int,
-    base_ar_parameters: ARParams,
-) -> PredictiveARParams:
-    """
-    Converts vector for beta and predictive samples in to AR params.
-    """
-    assert (
-        parameters.shape[1] == base_ar_parameters.ar_length + pred_length + 1
-    ), f"Unconstrained params don't have correct dimension. {parameters.shape} vs [param_dim ar_length+pred_length]"
-    dfs = 1e-3 + parameters[:, [-1]].exp()
-    return PredictiveARParams(
-        pred_length=pred_length,
-        predictive_samples=parameters[:, base_ar_parameters.ar_length : -1],
-        ar_length=base_ar_parameters.ar_length,
-        betas=parameters[:, : base_ar_parameters.ar_length],
-        obs_df=dfs,
-        obs_scale=base_ar_parameters.obs_scale,
-        prior_df=base_ar_parameters.prior_df,
-        prior_scale=base_ar_parameters.prior_scale,
-    )
 
 
 def sample_path(params: ARParams, path_length: int = 1000):
