@@ -20,9 +20,13 @@ def plot_contour(
     num_levels=10,
     num_points=100,
 ):
-
-    x_0 = torch.linspace(min, max, num_points)
-    x_1 = torch.linspace(min, max, num_points)
+    if isinstance(min, tuple):
+        assert isinstance(max, tuple), "Both min,max must be tuple or neither!"
+        x_0 = torch.linspace(min[0], max[0], num_points)
+        x_1 = torch.linspace(min[1], max[1], num_points)
+    else:
+        x_0 = torch.linspace(min, max, num_points)
+        x_1 = torch.linspace(min, max, num_points)
     _x = torch.hstack([_x.reshape(-1, 1) for _x in torch.meshgrid(x_0, x_1)])
 
     if inspect_loc is None:

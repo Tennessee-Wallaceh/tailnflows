@@ -99,6 +99,43 @@ def from_vector_df(
     )
 
 
+def from_vector_full(
+    parameters: Float[Tensor, "param_dim (obs_dim*obs_dim*ar_length)+pred_length+1"],
+    pred_length: int,
+    base_ar_parameters: ARParams,
+) -> PredictiveARParams:
+    """
+    Converts vector for beta and predictive samples into AR params.
+    This also includes the degrees of freedom.
+    """
+    obs_dim = base_ar_parameters.obs_dim
+    ar_length = base_ar_parameters.ar_length
+    raw_beta_dim = obs_dim * obs_dim * ar_length
+    raw_param_dim = raw_beta_dim + pred_length * obs_dim + 2
+    assert (
+        parameters.shape[1] == raw_param_dim
+    ), f"Unconstrained params don't have correct dimension. {parameters.shape} vs [param_dim ar_length+pred_length]"
+
+    betas = parameters[:, :raw_beta_dim].reshape(-1, obs_dim, obs_dim, ar_length)
+    predictive_samples = parameters[:, raw_beta_dim:-2].reshape(
+        -1, obs_dim, pred_length
+    )
+    df = 0.5 + torch.exp(parameters[:, [-2]])
+    scale = 1e-4 + torch.exp(parameters[:, [-1]])
+
+    return PredictiveARParams(
+        ar_length=ar_length,
+        obs_dim=obs_dim,
+        pred_length=pred_length,
+        predictive_samples=predictive_samples,
+        betas=betas,
+        obs_df=df,
+        obs_scale=scale,
+        prior_df=base_ar_parameters.prior_df,
+        prior_scale=base_ar_parameters.prior_scale,
+    )
+
+
 def get_log_likelihood(
     input: Float[Tensor, "num_obs obs_dim ar_length"],
     target: Float[Tensor, "num_obs obs_dim"],
@@ -133,8 +170,14 @@ def beta_log_prior(params: ARParams):
 
 
 def obs_df_log_prior(params: ARParams):
-    prior_dist = torch.distributions.Gamma(2.0, 0.5)
+    prior_dist = torch.distributions.Gamma(3.0, 2.0)
     ll_values = prior_dist.log_prob(params.obs_df)  # [param_dim]
+    return ll_values.sum(axis=1)
+
+
+def obs_scale_log_prior(params: ARParams):
+    prior_dist = torch.distributions.Gamma(1.0, 0.5)
+    ll_values = prior_dist.log_prob(params.obs_scale)  # [param_dim]
     return ll_values.sum(axis=1)
 
 
