@@ -4,13 +4,13 @@ from typing import Any
 from tailnflows.utils import get_project_root
 
 
-def add_raw_data(path: str, label: str, data: Any) -> None:
+def add_raw_data(path: str, label: str, data: Any, force_write: bool = False) -> None:
     rd_path = f"{get_project_root()}/experiment_output/{path}.p"
 
     data_file = Path(rd_path)
     if not data_file.is_file():
         pickle.dump({}, open(rd_path, "wb"))
-    else:
+    elif not force_write:
         confirm = input("Experiment data already present, reset? (y/n)")
         if confirm == "y":
             pickle.dump({}, open(rd_path, "wb"))
