@@ -193,14 +193,22 @@ class TTF_m(Flow):
             # a strictly lightening transformation
             tail_transform = flip(tail_transform)
 
-        # add the rest of the transformations
-        transforms = [tail_transform]
-        if rotation:
-            transforms = transforms + [LULinear(features=dim)]
+        # add tail transformation
+        transforms = [
+            tail_transform,
+        ]
 
+        # add the rest of the transformations
+        if rotation:
+            transforms.append(LULinear(features=dim))
+
+        # additional affine transform needed for linear dependency
+        # after the tail transformation
         transforms.append(
             MaskedAffineAutoregressiveTransform(
-                features=dim, context_features=condition_dim, **nn_kwargs
+                features=dim,
+                context_features=condition_dim,
+                **nn_kwargs,
             )
         )
 
@@ -245,6 +253,8 @@ class TTF_m_hybrid(Flow):
         base_distribution = StandardNormal([dim])
 
         # set up tail transform
+        # here the affine transformation is autoregressive, but the tail
+        # is marginal
         tail_transform = HybridTailMarginalTransform(
             features=dim,
             pos_tail_init=pos_tail_init,
@@ -264,9 +274,10 @@ class TTF_m_hybrid(Flow):
 
         transforms = [tail_transform]
 
+        if rotation:
+            transforms.append(LULinear(features=dim))
+
         for _ in range(flow_depth):
-            if rotation:
-                transforms.append(LULinear(features=dim))
 
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
@@ -345,12 +356,12 @@ class RQS(Flow):
         transforms = [
             MaskedAffineAutoregressiveTransform(
                 features=dim, context_features=condition_dim, **nn_kwargs
-            )
+            ),
         ]
-        for _ in range(flow_depth):
-            if rotation:
-                transforms.append(LULinear(features=dim))
+        if rotation:
+            transforms.append(LULinear(features=dim))
 
+        for _ in range(flow_depth):
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                     features=dim,
@@ -389,17 +400,15 @@ class gTAF(Flow):
 
         base_dist = TrainableStudentT(dim, init=tail_init)
 
-        transforms = []
-        for _ in range(flow_depth):
-            if rotation:
-                transforms.append(LULinear(features=dim))
-
-            transforms.append(
-                MaskedAffineAutoregressiveTransform(
-                    features=dim, context_features=condition_dim, **nn_kwargs
-                )
+        transforms = [
+            MaskedAffineAutoregressiveTransform(
+                features=dim, context_features=condition_dim, **nn_kwargs
             )
+        ]
+        if rotation:
+            transforms.append(LULinear(features=dim))
 
+        for _ in range(flow_depth):
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                     features=dim,
