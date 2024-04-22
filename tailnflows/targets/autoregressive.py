@@ -29,6 +29,7 @@ class PredictiveARParams(ARParams):
     # Includes additional 'predictive' samples treated as parameters
     pred_length: int
     predictive_samples: Float[Tensor, "param_dim obs_dim pred_length"]
+    names: list[str]
 
 
 def from_vector(
@@ -96,6 +97,7 @@ def from_vector_df(
         obs_scale=base_ar_parameters.obs_scale,
         prior_df=base_ar_parameters.prior_df,
         prior_scale=base_ar_parameters.prior_scale,
+        names=[],
     )
 
 
@@ -116,12 +118,26 @@ def from_vector_full(
         parameters.shape[1] == raw_param_dim
     ), f"Unconstrained params don't have correct dimension. {parameters.shape} vs [param_dim ar_length+pred_length]"
 
-    betas = parameters[:, :raw_beta_dim].reshape(-1, obs_dim, obs_dim, ar_length)
-    predictive_samples = parameters[:, raw_beta_dim:-2].reshape(
+    df = 1e-2 + parameters[:, [0]].exp()
+    scale = 1e-4 + parameters[:, [1]].exp()
+    betas = parameters[:, 2 : raw_beta_dim + 2].reshape(-1, obs_dim, obs_dim, ar_length)
+    predictive_samples = parameters[:, raw_beta_dim + 2 :].reshape(
         -1, obs_dim, pred_length
     )
-    df = 0.5 + torch.exp(parameters[:, [-2]])
-    scale = 1e-4 + torch.exp(parameters[:, [-1]])
+
+    obs_labels = ["obs df", "obs scale"]
+    beta_labels = [
+        f"beta_{lag},{target_ix},{input_ix}"
+        for target_ix in range(obs_dim)
+        for input_ix in range(obs_dim)
+        for lag in range(ar_length)
+    ]
+
+    predictive_labels = [
+        f"y_{step},{target_ix}"
+        for target_ix in range(obs_dim)
+        for step in range(pred_length)
+    ]
 
     return PredictiveARParams(
         ar_length=ar_length,
@@ -133,6 +149,7 @@ def from_vector_full(
         obs_scale=scale,
         prior_df=base_ar_parameters.prior_df,
         prior_scale=base_ar_parameters.prior_scale,
+        names=obs_labels + beta_labels + predictive_labels,
     )
 
 
@@ -167,6 +184,20 @@ def beta_log_prior(params: ARParams):
     ll_values = prior_dist.log_prob(params.betas)  # [param_dim]
     # sum across the observation sequence and dimension
     return ll_values.sum(axis=[1, 2, 3])
+
+
+def beta_horshoe_log_prior(params: ARParams):
+    param_dim = params.betas.shape[0]
+    global_scale = torch.distributions.HalfCauchy(1.0).sample([param_dim])
+    param_scale = torch.distributions.HalfCauchy(1.0).sample(
+        [param_dim, params.obs_dim, params.obs_dim, params.ar_length]
+    )  # one for each beta
+
+    prior_dist = torch.distributions.Normal(
+        loc=0.0, scale=params.prior_scale * global_scale * param_scale
+    )
+
+    return prior_dist.log_prob(params.betas).sum(axis=[1, 2, 3])
 
 
 def obs_df_log_prior(params: ARParams):
