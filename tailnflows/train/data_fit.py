@@ -1,3 +1,4 @@
+import torch
 from torch.optim import Adam
 import tqdm
 from torch.utils.data import TensorDataset, DataLoader
@@ -12,7 +13,7 @@ def train(
     num_epochs=500,
     batch_size=100,
     label="",
-    record_hook=None,
+    hook=None,
 ):
     optimizer = Adam(list(model.parameters()), lr=lr)
     trn_data = DataLoader(TensorDataset(x_trn), batch_size=batch_size)
@@ -20,7 +21,7 @@ def train(
     losses = []
     vlosses = []
     hook_data = {}
-    tst_loss = torch.tensor(np.inf)
+    tst_loss = torch.tensor(torch.inf)
     tst_ix = -1
     for i in loop:
         # mini batch
@@ -32,7 +33,7 @@ def train(
 
         with torch.no_grad():
             if hook is not None:
-                record_hook(model, hook_data)
+                hook(model, hook_data)
 
             val_loss = -model.log_prob(x_val).mean()
 
