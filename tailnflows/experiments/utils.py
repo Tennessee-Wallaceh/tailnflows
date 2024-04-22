@@ -10,6 +10,12 @@ def add_raw_data(path: str, label: str, data: Any) -> None:
     data_file = Path(rd_path)
     if not data_file.is_file():
         pickle.dump({}, open(rd_path, "wb"))
+    else:
+        confirm = input("Experiment data already present, reset? (y/n)")
+        if confirm == "y":
+            pickle.dump({}, open(rd_path, "wb"))
+        else:
+            print("no reset, appending data...")
 
     raw_data = pickle.load(open(rd_path, "rb"))
     if label not in raw_data:
