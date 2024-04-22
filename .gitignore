@@ -163,3 +163,4 @@ cython_debug/
 experiment_output/*
 data/*
 rough_work/*
+*.code-workspace
