@@ -24,7 +24,7 @@ def get_project_root():
     if IN_COLAB:
         from google.colab import drive
 
-        drive.mount("/content/drive")
+        drive.mount("/content/drive", force_remount=True)
         # this needs to correspond to actual location in google drive, populated with data
         os.environ["TAILNFLOWS_HOME"] = "/content/drive/MyDrive/tailnflows"
 
