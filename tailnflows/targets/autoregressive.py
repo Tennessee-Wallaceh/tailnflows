@@ -121,9 +121,12 @@ def from_vector_full(
     df = 1e-2 + parameters[:, [0]].exp()
     scale = 1e-4 + parameters[:, [1]].exp()
     betas = parameters[:, 2 : raw_beta_dim + 2].reshape(-1, obs_dim, obs_dim, ar_length)
-    predictive_samples = parameters[:, raw_beta_dim + 2 :].reshape(
-        -1, obs_dim, pred_length
-    )
+    if pred_length != 0:
+        predictive_samples = parameters[:, raw_beta_dim + 2 :].reshape(
+            -1, obs_dim, pred_length
+        )
+    else:
+        predictive_samples = torch.tensor(torch.nan)
 
     obs_labels = ["obs df", "obs scale"]
     beta_labels = [

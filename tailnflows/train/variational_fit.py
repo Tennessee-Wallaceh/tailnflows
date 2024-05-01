@@ -39,8 +39,8 @@ def train(
     optimizer = Adam(parameters, lr=lr)
 
     loop = tqdm.tqdm(range(int(num_epochs)))
-    losses = []
-    for i in loop:
+    losses = torch.zeros(int(num_epochs))
+    for epoch in loop:
         optimizer.zero_grad()
         x_approx, log_q_x = model.sample_and_log_prob(batch_size)
         neg_elbo_loss = (log_q_x - target(x_approx)).mean()
@@ -48,16 +48,16 @@ def train(
         optimizer.step()
 
         with torch.no_grad():
-            losses.append(neg_elbo_loss.detach().cpu())
+            losses[epoch] = neg_elbo_loss.detach().cpu()
             loop.set_postfix(
                 {
-                    "neg_elbo": f"{losses[-1]:.2f}",
-                    "model": label,
+                    "elbo": f"{-losses[epoch]:.2f}",
+                    "": label,
                 }
             )
 
-            # compute test stats at last epoch
-            if i == num_epochs - 1:
+            # compute test stats at last epoch, using n=10_000
+            if epoch == num_epochs - 1:
                 tst_ess = ess(model.sample_and_log_prob, target, 10_000)
                 tst_ess = tst_ess.detach().cpu().numpy()
                 tst_psis = psis_index(model.sample_and_log_prob, target, 10_000)
