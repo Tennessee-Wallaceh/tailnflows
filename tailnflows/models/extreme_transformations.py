@@ -112,7 +112,7 @@ def _erfcinv(x):
 def _shift_power_transform_and_lad(z, tail_param):
     transformed = (SQRT_2 / SQRT_PI) * (torch.pow(1 + z / tail_param, tail_param) - 1)
     lad = (tail_param - 1) * torch.log(1 + z / tail_param)
-    lad += torch.log(SQRT_2 / SQRT_PI)
+    lad += torch.log(torch.tensor(SQRT_2 / SQRT_PI))
     return transformed, lad
 
 
@@ -121,7 +121,7 @@ def _shift_power_inverse_and_lad(x, tail_param):
         (SQRT_PI / SQRT_2) * tail_param * (torch.pow(1 + x, 1 / tail_param) - 1)
     )
     lad = ((1 / tail_param) - 1) * torch.log(1 + x)
-    lad -= torch.log(SQRT_2 / SQRT_PI)
+    lad -= torch.log(torch.tensor(SQRT_2 / SQRT_PI))
     return transformed, lad
 
 
@@ -131,7 +131,7 @@ def _extreme_transform_and_lad(z, tail_param):
 
     lad = torch.log(g) * (-tail_param - 1)
     lad -= 0.5 * torch.square(z)
-    lad += torch.log(SQRT_2 / SQRT_PI)
+    lad += torch.log(torch.tensor(SQRT_2 / SQRT_PI))
 
     return x, lad
 
@@ -143,8 +143,8 @@ def _small_erfcinv(x, tail_param):
     """
     log_z_sq = 2 * torch.log(1 + x * tail_param) / tail_param
 
-    inner = torch.log(2 / PI) + log_z_sq
-    inner -= (torch.log(2 / PI) + log_z_sq).log()
+    inner = torch.log(torch.tensor(2 / PI)) + log_z_sq
+    inner -= (torch.log(torch.tensor(2 / PI)) + log_z_sq).log()
 
     z = inner.pow(0.5) / SQRT_2
 
@@ -164,7 +164,7 @@ def _extreme_inverse_and_lad(x, tail_param):
 
     lad = (-1 - 1 / tail_param) * torch.log(inner)
     lad += torch.square(erfcinv_val)
-    lad += torch.log(SQRT_PI / SQRT_2)
+    lad += torch.log(torch.tensor(SQRT_PI / SQRT_2))
 
     return z, lad
 
