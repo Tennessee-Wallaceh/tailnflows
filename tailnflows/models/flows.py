@@ -466,20 +466,25 @@ class mTAF(Flow):
         # always perform the initial permutation
         transforms = [initial_permutation]
 
-        for _ in range(flow_depth):
-            if rotation:
+        transforms.append(
+            MaskedAffineAutoregressiveTransform(
+                features=dim,
+                hidden_features=num_hidden_layers,
+                num_blocks=num_hidden_layers,
+                activation=nn_activation,
+            )
+        )
+
+        if rotation:
+            if (self.tail_init > 0).sum() == dim:
+                # if all are heavy we can just use standard rotation
+                transforms.append(LULinear(features=dim))
+            else:
                 # special rotation within heavy/light groups
+                # have to run on CPU otherwise it breaks
                 transforms.append(TailLU(dim, int(num_heavy), device="cpu"))
 
-            transforms.append(
-                MaskedAffineAutoregressiveTransform(
-                    features=dim,
-                    hidden_features=num_hidden_layers,
-                    num_blocks=num_hidden_layers,
-                    activation=nn_activation,
-                )
-            )
-
+        for _ in range(flow_depth):
             transforms.append(
                 MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                     features=dim,
