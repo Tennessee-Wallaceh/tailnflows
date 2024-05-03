@@ -25,43 +25,46 @@ N_OBS = 100
 """
 Model specifications
 """
-base_rqs_spec = dict(
-    rotation=True,
-    flow_depth=5,
-    num_bins=5,
-    tail_bound=5.0,
-)
-
-
-def rqs(raw_param_dim: int):
-    return RQS(
-        raw_param_dim, use=ModelUse.variational_inference, model_kwargs=base_rqs_spec
+def base_rqs_spec(depth: int, tail_bound: float):
+    return dict(
+        rotation=True,
+        flow_depth=depth,
+        num_bins=3,
+        tail_bound=tail_bound,
     )
 
 
-def ttf_rqs(raw_param_dim: int):
+def rqs(raw_param_dim: int, depth: int, tail_bound: float):
+    return RQS(
+        raw_param_dim, 
+        use=ModelUse.variational_inference, 
+        model_kwargs=base_rqs_spec(depth, tail_bound)
+    )
+
+
+def ttf_rqs(raw_param_dim: int, depth: int, tail_bound: float):
     return TTF_m(
         raw_param_dim,
         use=ModelUse.variational_inference,
         model_kwargs=dict(
-            **base_rqs_spec,
+            **base_rqs_spec(depth, tail_bound),
             # TTF specific
             final_affine=True,
             fix_tails=False,
-            pos_tail_init=0.25 * torch.ones([raw_param_dim]),
-            neg_tail_init=0.25 * torch.ones([raw_param_dim]),
+            pos_tail_init=0.1 * torch.ones([raw_param_dim]),
+            neg_tail_init=0.1 * torch.ones([raw_param_dim]),
         ),
     )
 
 
-def gtaf_rqs(raw_param_dim: int):
+def gtaf_rqs(raw_param_dim: int, depth: int, tail_bound: float):
     return gTAF(
         raw_param_dim,
         use=ModelUse.variational_inference,
         model_kwargs=dict(
             **base_rqs_spec,
             # gTAF specific
-            tail_init=4.0 * torch.ones([raw_param_dim]),  # df
+            tail_init=10.0 * torch.ones([raw_param_dim]),  # df
         ),
     )
 
@@ -156,6 +159,8 @@ def run_experiment(
     ar_length: int,
     pred_length: int,
     opt_params: OptConfig,
+    model_depth: int,
+    model_tail_bound: float,
 ):
     if torch.cuda.is_available():
         torch.set_default_device("cuda")
@@ -206,7 +211,8 @@ def run_experiment(
         return ll_fcn(ar_params) + prior_ll(ar_params) + pred_ll(ar_params)
 
     # build model
-    model = models[model_label](raw_param_dim)
+    model = models[model_label](raw_param_dim, model_depth, model_tail_bound)
+    model_label = f'{model_label}_d{model_depth}_tb_{int(model_tail_bound)}_seed_{seed}'
 
     # run the train
     losses, final_metrics = variational_fit.train(
@@ -215,7 +221,7 @@ def run_experiment(
         lr=opt_params["lr"],
         num_epochs=opt_params["num_epochs"],
         batch_size=opt_params["batch_size"],
-        label=f"model: {model_label} start: {start_point} d: {raw_param_dim}",
+        label=f"model: {model_label} seed: {seed} start: {start_point} d: {raw_param_dim}",
     )
 
     # save metrics and diagnostics
@@ -223,10 +229,11 @@ def run_experiment(
         out_path + "/metrics",
         model_label,
         {
-            "start_point": start_point,
-            "psis_k": final_metrics.psis_k,
-            "ess": final_metrics.ess,
-            "elbo": final_metrics.elbo,
+            "start_point": int(start_point.cpu()),
+            "psis_k": float(final_metrics.psis_k),
+            "ess": float(final_metrics.ess),
+            "elbo": float(final_metrics.elbo),
+            "seed": int(seed),
         },
         force_write=True,
     )
@@ -242,36 +249,67 @@ def run_experiment(
     )
 
     # this can create a potentially large amount of data
-    x_q = model.sample(10_000)
-    add_raw_data(
-        out_path + "/samples",
-        model_label,
-        {
-            "start_point": start_point,
-            "samples": x_q.detach().cpu().numpy(),
-        },
-        force_write=True,
-    )
+    #x_q = model.sample(1000)
+    #add_raw_data(
+    #    out_path + "/samples",
+    #    model_label,
+    #    {
+    #        "start_point": start_point,
+    #        "samples": x_q.detach().cpu().numpy(),
+    #    },
+    #    force_write=True,
+    #)
 
 
 def configured_experiments():
-    opt_params = {"lr": 1e-3, "num_epochs": 1e2, "batch_size": 1000}
-    seed = 0
-    model_label = "ttf_rqs"
+    import itertools
+    import multiprocessing as mp
+
+    opt_params = {"lr": 5e-4, "num_epochs": 1e4, "batch_size": 1000}
+    #opt_params = {"lr": 1e-3, "num_epochs": 10, "batch_size": 10}
     series_dim = 5
-    start_point = 100
     ar_length = 1
     pred_length = 5
-    out_path = "2024-04-vi-autoreg-dry"
+    out_path = "2024-04-vi-autoreg-ablate"
 
-    for model_label in ["ttf_rqs", "rqs", "gtaf_rqs"]:
-        run_experiment(
-            out_path,
-            seed,
-            model_label,
-            series_dim,
-            start_point,
-            ar_length,
-            pred_length,
-            opt_params,
-        )
+    # break series into chunks of N_OBS
+    start_points = torch.arange(0, 3101, N_OBS)
+    start_points = start_points[torch.randperm(len(start_points))][:10]
+
+    model_labels = ["ttf_rqs", "rqs", "gtaf_rqs"]
+    tail_bounds = [2., 3., 4.]
+    model_depths = [3, 5, 7]
+    seeds = [5, 10, 15]
+
+    experiments = list(itertools.product(
+        start_points, 
+        model_labels,
+        model_depths,
+        tail_bounds,
+        seeds,
+    ))
+    print(f'running {len(experiments)} experiments..')
+
+    max_runs = 2
+    sem = mp.Semaphore(max_runs)
+    def wrapped_run(sem, **kwargs):
+        with sem: # limit to max runs concurrently
+            run_experiment(**kwargs)
+    
+    processes = []
+    for start_point, model_label, model_depth, tail_bound, seed in experiments:
+        p = mp.Process(target=wrapped_run, args=(sem,), kwargs=dict(
+            out_path=out_path,
+            seed=seed,
+            model_label=model_label,
+            series_dim=series_dim,
+            start_point=start_point,
+            ar_length=ar_length,
+            pred_length=pred_length,
+            opt_params=opt_params,
+            model_depth=model_depth,
+            model_tail_bound=tail_bound,
+        ))
+        p.start()
+        processes.append(p)
+

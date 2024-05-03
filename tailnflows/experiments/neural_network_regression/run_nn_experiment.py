@@ -1,4 +1,5 @@
 import torch
+import gc
 from torch.optim import Adam
 import tqdm
 import argparse
@@ -29,34 +30,36 @@ def generate_data(n, d, nuisance_df):
     noise = normal_base.sample([n, 1])
 
     y = x[:, [-1]] + noise
+
+    # force no grads
+    x = x.detach()
+    y = y.detach()
+
     return x, y
 
 
-def fit_nn(neural_net, nuisance_df, dim, num_epochs=500, lr=1e-3) -> float:
+def fit_nn(neural_net, nuisance_df, dim, num_epochs=500, lr=1e-3, label="") -> float:
     # num obs
     x_trn, y_trn = generate_data(NUM_OBS, dim, nuisance_df)
     x_tst, y_tst = generate_data(NUM_OBS, dim, nuisance_df)
     x_val, y_val = generate_data(NUM_OBS, dim, nuisance_df)
+
 
     params = list(neural_net.parameters())
     optimizer = Adam(params, lr=lr)
 
     loop = tqdm.tqdm(range(int(num_epochs)))
 
-    vlosses = []
-    tst_loss = torch.inf
-    for _ in loop:
-        # sample without replacement
-        rows = torch.randperm(NUM_OBS)[:BATCH_SIZE]
-        x_batch = x_trn[rows, :]
-        y_batch = y_trn[rows, :]
-
+    vlosses = torch.zeros(num_epochs)
+    min_vloss = torch.tensor(torch.inf)
+    tst_loss = torch.tensor(torch.inf)
+    for epoch in loop:
         # train step
         optimizer.zero_grad()
 
         neural_net.train()
-        y_approx = neural_net(x_batch)
-        loss = (y_batch - y_approx).square().mean()  # mse
+        y_approx = neural_net(x_trn)
+        loss = (y_trn - y_approx).square().mean()  # mse
 
         loss.backward()
         optimizer.step()
@@ -66,14 +69,14 @@ def fit_nn(neural_net, nuisance_df, dim, num_epochs=500, lr=1e-3) -> float:
             neural_net.eval()
             y_approx = neural_net(x_val)
             vloss = (y_val - y_approx).square().mean()  # mse
-            vlosses.append(vloss)
-
-            if len(vlosses) > 1 and vloss <= min(vlosses):
+            vlosses[epoch] = vloss
+            if vloss <= min_vloss:
+                min_vloss = vloss
                 y_approx = neural_net(x_tst)
-                tst_loss = (y_tst - y_approx).square().mean()
+                tst_loss = (x_tst[:, [-1]] - y_approx).square().mean().detach()
 
-        loop.set_postfix({"loss": f"{loss:.2f} | * {tst_loss:.2f}"})
-
+        loop.set_postfix({"loss": f"{loss.detach():.2f} | * {tst_loss:.2f} {label}"})
+        
     return float(tst_loss.cpu())
 
 
@@ -87,9 +90,13 @@ def run_experiment(
     num_epochs: int,
     lr: float,
     verbose: bool = False,
+    label:str = "",
 ):
     if torch.cuda.is_available():
         torch.set_default_device("cuda")
+        device = "cuda"
+    else:
+        device = "cpu"
 
     assert df >= 0.0, "Degree of freedom must be >= 0!"
 
@@ -97,18 +104,18 @@ def run_experiment(
 
     activation_fcn = activations[activation_fcn_name]
 
-    mlp = MLP([dim], [1], hidden_dims, activation=activation_fcn)
+    mlp = MLP([dim], [1], hidden_dims, activation=activation_fcn).to(device)
 
     if verbose:
         if torch.cuda.is_available():
-            device = torch.cuda.device(torch.cuda.current_device())
+            phys_device = torch.cuda.device(torch.cuda.current_device())
         else:
-            device = "cpu"
+            phys_device = "cpu"
         print(
-            f"Device: {device}",
+            f"Device: {phys_device}",
         )
 
-    tst_loss = fit_nn(mlp, df, dim, num_epochs, lr)
+    tst_loss = fit_nn(mlp, df, dim, num_epochs, lr, label)
 
     # save results
     result = {
@@ -116,9 +123,48 @@ def run_experiment(
         "df": df,
         "seed": seed,
         "activation": activation_fcn_name,
-        "tst_loss": tst_loss,
+        "tst_loss": float(tst_loss.cpu()),
     }
     add_raw_data(out_path, "", result, force_write=True)
+
+
+def configured_experiments():
+    # python configuration for running number of experiments
+    # uses multiprocessing to target multiple runs on 1 GPU so needs 
+    # to be tuned
+    import itertools
+    import multiprocessing as mp
+
+    max_runs = 2
+    out_path = '2024-04-nn-nonoise-loss'
+    seeds = range(3)
+    dims = [5, 10, 50, 100]
+    dfs = [1., 2., 5., 30.]
+    activations = ['sigmoid', 'relu']
+
+    experiments = list(itertools.product(seeds, dims, dfs, activations))
+    sem = mp.Semaphore(max_runs)
+    def wrapped_run(sem, **kwargs):
+        with sem: # limit to max runs concurrently
+            run_experiment(**kwargs)
+
+    processes = []
+    print(f'{len(experiments)} experiments to run...')
+    for exp_ix, (seed, dim, df, activation_fcn) in enumerate(experiments): 
+        p = mp.Process(target=wrapped_run, args=(sem,), kwargs=dict(
+            out_path=out_path,
+            seed=seed,
+            dim=dim,
+            activation_fcn_name=activation_fcn,
+            hidden_dims=[50, 50],
+            df=df,
+            num_epochs=5000,
+            lr=1e-3,
+            verbose=False,
+            label=f'({exp_ix})'
+            ))
+        p.start()
+        processes.append(p)
 
 
 if __name__ == "__main__":
