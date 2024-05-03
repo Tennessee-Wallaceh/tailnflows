@@ -5,14 +5,16 @@ from nflows.transforms import made as made_module
 from nflows.transforms import Transform
 from tailnflows.models.utils import inv_sftplus
 from typing import TypedDict, Optional, Callable
+from math import sqrt
+
 
 MAX_TAIL = 5.0
 LOW_TAIL_INIT = 0.1
 HIGH_TAIL_INIT = 0.9
-SQRT_2 = torch.sqrt(torch.tensor(2.0))
-SQRT_PI = torch.sqrt(torch.tensor(torch.pi))
-MIN_ERFC_INV = torch.tensor(1e-6)
-PI = torch.tensor(torch.pi)
+SQRT_2 = sqrt(2.0)
+SQRT_PI = sqrt(torch.pi)
+MIN_ERFC_INV = 1e-6
+PI = torch.pi
 
 
 class NNKwargs(TypedDict, total=False):
