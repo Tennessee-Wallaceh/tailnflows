@@ -184,8 +184,7 @@ class TTF_m(Flow):
             assert (
                 neg_tail_init is not None
             ), "Fixing tails, but no init provided for neg tails"
-            for parameter in tail_transform.parameters():
-                parameter.requires_grad = False
+            tail_transform.fix_tails()
 
         if use == ModelUse.density_estimation:
             # if using for density estimation, the tail transformation needs to be flipped
@@ -481,8 +480,7 @@ class mTAF(Flow):
                 transforms.append(LULinear(features=dim))
             else:
                 # special rotation within heavy/light groups
-                # have to run on CPU otherwise it breaks
-                transforms.append(TailLU(dim, int(num_heavy), device="cpu"))
+                transforms.append(TailLU(dim, int(num_heavy)))
 
         for _ in range(flow_depth):
             transforms.append(
