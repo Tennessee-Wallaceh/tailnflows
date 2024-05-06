@@ -309,6 +309,11 @@ class TailMarginalTransform(Transform):
         z, lad = _tail_inverse(x, pos_tail_param, neg_tail_param)
         return z, lad
 
+    def fix_tails(self):
+        # freeze only the parameters related to the tail
+        self._unc_pos_tail.requires_grad = False
+        self._unc_neg_tail.requires_grad = False
+
 
 class TailAffineMarginalTransform(Transform):
     def __init__(
@@ -337,7 +342,7 @@ class TailAffineMarginalTransform(Transform):
             shift_init = torch.zeros([features])
 
         if scale_init is None:
-            scale_init = inv_sftplus(torch.ones([features]))
+            scale_init = torch.ones([features])
 
         assert torch.Size([features]) == pos_tail_init.shape
         assert torch.Size([features]) == neg_tail_init.shape
@@ -368,6 +373,11 @@ class TailAffineMarginalTransform(Transform):
 
         z, lad = _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale)
         return z, lad.sum(axis=1)
+
+    def fix_tails(self):
+        # freeze only the parameters related to the tail
+        self._unc_pos_tail.requires_grad = False
+        self._unc_neg_tail.requires_grad = False
 
 
 class TailScaleShiftMarginalTransform(Transform):
