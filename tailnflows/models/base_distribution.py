@@ -31,6 +31,7 @@ def generalized_normal_log_pdf(x, beta):
 
 class TrainableStudentT(Distribution):
     MIN_DF = 1e-3  # minimum degrees of freedom, needed for numerical stability
+    MIN_RECIPROCAL = 1e-24
 
     def __init__(self, dim=2, init=None):
         super().__init__()
@@ -69,7 +70,7 @@ class TrainableStudentT(Distribution):
             [num_samples, self.dim], dtype=self.dfs.dtype, device=self.dfs.device
         )
         Z = torch.distributions.chi2.Chi2(self.dfs).rsample([num_samples])
-        Z.detach().clamp_(min=torch.finfo(self.dfs.dtype).tiny * 1e13)
+        Z.clamp_(min=self.MIN_RECIPROCAL)  # inplace operation
         Y = X * torch.rsqrt(Z / self.dfs)
         return Y
 

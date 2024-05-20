@@ -1,36 +1,45 @@
 from enum import Enum
-from typing import TypedDict, Optional, Type
+from typing import TypedDict, Optional, Type, Callable, Literal
 import torch
+
+from torch.nn.functional import logsigmoid
 
 # nflows dependencies
 from nflows.flows import Flow
-from nflows.distributions.uniform import BoxUniform
+from nflows.distributions import Distribution
 from nflows.distributions.normal import StandardNormal
 from nflows.transforms.autoregressive import (
     MaskedAffineAutoregressiveTransform,
     MaskedPiecewiseRationalQuadraticAutoregressiveTransform,
+    MaskedUMNNAutoregressiveTransform,
 )
 from nflows.transforms.lu import LULinear
 from nflows.transforms.base import CompositeTransform, InverseTransform
 from nflows.transforms.nonlinearities import Logit
 from nflows.transforms import Permutation
+from nflows.transforms.normalization import BatchNorm
+from nflows.transforms.base import Transform
+from nflows.transforms.standard import IdentityTransform
+from nflows.transforms.orthogonal import HouseholderSequence
+from nflows.transforms.permutations import RandomPermutation
 
 # custom modules
 from tailnflows.models.extreme_transformations import (
     configure_nn,
     NNKwargs,
-    MaskedTailAutoregressiveTransform,
     TailAffineMarginalTransform,
     flip,
     TailMarginalTransform,
+    TailScaleShiftMarginalTransform,
+    MaskedExtremeAutoregressiveTransform,
     CopulaMarginalTransform,
-    HybridTailMarginalTransform,
+    RQSMarginalTransform,
+    AffineMarginalTransform,
 )
 from tailnflows.models.base_distribution import TrainableStudentT, NormalStudentTJoint
 from marginal_tail_adaptive_flows.utils.tail_permutation import (
     TailLU,
 )
-from tailnflows.models.utils import Softplus
 from tailnflows.models.comet_models import MarginalLayer
 
 
@@ -54,12 +63,7 @@ def _get_intial_permutation(degrees_of_freedom):
     return permutation, rearranged_dfs.squeeze()
 
 
-def _df_to_tailp(dfs):
-    # changes degrees of freedom to tail parameters
-    return torch.tensor([1 / df if df > 0 else 1e-4 for df in dfs])
-
-
-ModelUse = Enum("ModelUse", ["density_estimation", "variational_inference"])
+ModelUse = Literal["density_estimation", "variational_inference"]
 
 
 class ModelKwargs(TypedDict, total=False):
@@ -70,139 +74,118 @@ class ModelKwargs(TypedDict, total=False):
     fix_tails: Optional[bool]
 
 
-Domain = Enum("Domain", ["positive"])
+# Utility transforms
+class ConstraintTransform(Transform):
+    """Transform that"""
 
-ModelName = Enum(
-    "ModelName",
-    [
-        "TTF",
-        "TTF_m",
-        "TTF_m_hybrid",
-        "RQS",
-        "gTAF",
-        "mTAF",
-        "COMET",
-        "Copula_m",
-    ],
-)
+    def __init__(self, dim, transforms, index_sets: list[set[int]]):
 
-
-# Define flow models
-class TTF(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-        nn_kwargs: NNKwargs = {},
-        domain: Optional[Domain] = None,
-    ):
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        condition_dim = model_kwargs.get("condition_dim", None)
-        num_bins = model_kwargs.get("num_bins", 8)
-        rotation = model_kwargs.get("rotation", True)
-
-        base_distribution = StandardNormal([dim])
-
-        # autoregressive (fast) in forward (target -> latent) direction
-        transforms = [
-            MaskedTailAutoregressiveTransform(
-                features=dim,
-                nn_kwargs=nn_kwargs,
-            )
+        assert (
+            len(index_sets) == 1 or len(set.intersection(*index_sets)) == 0
+        ), "Overlap in index sets!"
+        print(len(index_sets), len(transforms))
+        assert len(index_sets) == len(
+            transforms
+        ), "One index set required for each transform"
+        super().__init__()
+        self.transforms = transforms
+        self.index_sets = [
+            torch.tensor(list(index_set), dtype=torch.int) for index_set in index_sets
         ]
-
-        if use == ModelUse.density_estimation:
-            # if using for density estimation, the tail transformation needs to be flipped
-            # this keeps the autoregression in the data->noise direction, but means data->noise is
-            # a strictly lightening transformation
-            transforms[0] = flip(transforms[0])
-
-        if rotation:
-            transforms.append(LULinear(features=dim))
-
-        transforms.append(
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                context_features=condition_dim,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
-                nn_kwargs=nn_kwargs,
-            )  # type: ignore
+        identity_index = torch.tensor(
+            list(set(range(dim)).difference(set.union(*index_sets))), dtype=torch.int
         )
+        self.transforms.append(IdentityTransform())
+        self.index_sets.append(identity_index)
 
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
+    def forward(self, inputs, context=None):
+        batch_size = inputs.size(0)
+        outputs = torch.zeros_like(inputs)
+        logabsdet = inputs.new_zeros(batch_size)
 
-        if domain == Domain.positive:
-            transforms = [Softplus()] + transforms
+        for index_set, transform in zip(self.index_sets, self.transforms):
+            trans_out, trans_lad = transform(inputs[:, index_set])
+            outputs[:, index_set] = trans_out
+            logabsdet += trans_lad  # accumulate across dims
 
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=base_distribution,
-        )
+        return outputs, logabsdet
+
+    def inverse(self, inputs, context=None):
+        batch_size = inputs.size(0)
+        outputs = torch.zeros_like(inputs)
+        logabsdet = inputs.new_zeros(batch_size)
+
+        for index_set, transform in zip(self.index_sets, self.transforms):
+            trans_out, trans_lad = transform.inverse(inputs[:, index_set])
+            outputs[:, index_set] = trans_out
+            logabsdet += trans_lad  # accumulate across dims
+
+        return outputs, logabsdet
 
 
-class TTF_m(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-        nn_kwargs: NNKwargs = {},
-    ):
-        # configure default settings
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        pos_tail_init = model_kwargs.get("pos_tail_init", None)
-        neg_tail_init = model_kwargs.get("neg_tail_init", None)
-        rotation = model_kwargs.get("rotation", True)
-        fix_tails = model_kwargs.get("fix_tails", False)
-        flow_depth = model_kwargs.get("flow_depth", 1)
-        final_affine = model_kwargs.get("final_affine", False)
-        condition_dim = model_kwargs.get("condition_dim", None)
-        nn_kwargs = configure_nn(nn_kwargs)
+class Softplus(Transform):
+    """
+    Softplus non-linearity
+    """
 
-        # base distributin
-        base_distribution = StandardNormal([dim])
+    THRESHOLD = 20.0
+    EPS = 1e-8  # a small value, to ensure that the inverse doesn't evaluate to 0.
 
-        # set up tail transform
-        if final_affine:
-            tail_transform = TailAffineMarginalTransform(
-                features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
-            )
-        else:
-            tail_transform = TailMarginalTransform(
-                features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
-            )
+    def __init__(self, offset=1e-3):
+        super().__init__()
+        self.offset = offset
 
-        if fix_tails:
-            assert (
-                pos_tail_init is not None
-            ), "Fixing tails, but no init provided for pos tails"
-            assert (
-                neg_tail_init is not None
-            ), "Fixing tails, but no init provided for neg tails"
-            tail_transform.fix_tails()
+    def inverse(self, z, context=None):
+        # maps real z to postive real x, with log grad
+        x = torch.zeros_like(z)
+        above = z > self.THRESHOLD
+        x[above] = z[above]
+        x[~above] = torch.log1p(z[~above].exp())
+        lad = logsigmoid(z)
+        return self.EPS + x, lad.sum(axis=1)
 
-        if use == ModelUse.density_estimation:
-            # if using for density estimation, the tail transformation needs to be flipped
-            # this keeps the autoregression in the data->noise direction, but means data->noise is
-            # a strictly lightening transformation
-            tail_transform = flip(tail_transform)
+    def forward(self, x, context=None):
+        # if x = 0, little can be done
+        if torch.min(x) <= 0:
+            raise InputOutsideDomain()
 
-        # add tail transformation
-        transforms = [
-            tail_transform,
-        ]
+        z = x + torch.log(-torch.expm1(-x))
+        lad = x - torch.log(torch.expm1(x))
 
-        # add the rest of the transformations
-        if rotation:
-            transforms.append(LULinear(features=dim))
+        return z, lad.sum(axis=1)
 
-        # additional affine transform needed for linear dependency
-        # after the tail transformation
+
+#######################
+# base transforms
+
+BaseTransform = Callable[[int], list[Transform]]
+
+
+def base_nsf_transform(
+    dim: int,
+    *,
+    condition_dim: Optional[int] = None,
+    depth: int = 1,
+    num_bins: int = 5,
+    tail_bound: float = 3.0,
+    linear_layer: bool = False,
+    random_permute: bool = False,
+    affine_autoreg_layer: bool = False,
+    householder_rotatation_layer: bool = False,
+    batch_norm: bool = False,
+    nn_kwargs: NNKwargs = {},
+) -> list[Transform]:
+    """
+    An autoregressive RQS transform of configurable depth.
+    """
+    transforms: list[Transform] = []
+    if linear_layer:
+        transforms.append(LULinear(features=dim))
+
+    if affine_autoreg_layer:
+        if householder_rotatation_layer:
+            transforms.append(HouseholderSequence(dim, dim))
+
         transforms.append(
             MaskedAffineAutoregressiveTransform(
                 features=dim,
@@ -211,383 +194,351 @@ class TTF_m(Flow):
             )
         )
 
-        for _ in range(flow_depth):
-            transforms.append(
-                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                    features=dim,
-                    context_features=condition_dim,
-                    num_bins=num_bins,
-                    tails="linear",
-                    tail_bound=tail_bound,
-                    **nn_kwargs,
-                )
-            )
+    nn_kwargs = configure_nn(nn_kwargs)
+    for _ in range(depth):
+        if batch_norm:
+            transforms.append(BatchNorm(features=dim))
 
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
+        if random_permute:
+            transforms.append(RandomPermutation(dim))
 
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=base_distribution,
-        )
+        if householder_rotatation_layer:
+            transforms.append(HouseholderSequence(dim, dim))
 
-
-class TTF_m_hybrid(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-        nn_kwargs: NNKwargs = {},
-    ):
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        pos_tail_init = model_kwargs.get("pos_tail_init", None)
-        neg_tail_init = model_kwargs.get("neg_tail_init", None)
-        rotation = model_kwargs.get("rotation", True)
-        fix_tails = model_kwargs.get("fix_tails", True)
-        flow_depth = model_kwargs.get("flow_depth", 1)
-        nn_kwargs = configure_nn(nn_kwargs)
-
-        base_distribution = StandardNormal([dim])
-
-        # set up tail transform
-        # here the affine transformation is autoregressive, but the tail
-        # is marginal
-        tail_transform = HybridTailMarginalTransform(
-            features=dim,
-            pos_tail_init=pos_tail_init,
-            neg_tail_init=neg_tail_init,
-            nn_kwargs=nn_kwargs,
-        )
-
-        if fix_tails:
-            tail_transform._unc_pos_tail.requires_grad = False
-            tail_transform._unc_neg_tail.requires_grad = False
-
-        if use == ModelUse.density_estimation:
-            # if using for density estimation, the tail transformation needs to be flipped
-            # this keeps the autoregression in the data->noise direction, but means data->noise is
-            # a strictly lightening transformation
-            tail_transform = flip(tail_transform)
-
-        transforms = [tail_transform]
-
-        if rotation:
-            transforms.append(LULinear(features=dim))
-
-        for _ in range(flow_depth):
-
-            transforms.append(
-                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                    features=dim,
-                    num_bins=num_bins,
-                    tails="linear",
-                    tail_bound=tail_bound,
-                    **nn_kwargs,
-                )
-            )
-
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
-
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=base_distribution,
-        )
-
-
-class Copula_m(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-    ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
-        num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", 1.0)
-
-        if use == ModelUse.density_estimation:
-            # if using for density estimation, the tail transformation needs to be flipped
-            # this keeps the autoregression in the data->noise direction, but means data->noise is
-            # a strictly lightening transformation
-            transforms[0] = flip(transforms[0])
-
-        transforms = [
-            CopulaMarginalTransform(features=dim, init=tail_init),
+        transforms.append(
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
                 features=dim,
-                hidden_features=hidden_layer_size,
-                num_blocks=num_hidden_layers,
+                context_features=condition_dim,
                 num_bins=num_bins,
-                tails=None,
-                tail_bound=1.0,
-            ),
-        ]
-
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
-
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=BoxUniform(low=-torch.ones(dim), high=torch.ones(dim)),
-        )
-
-
-class RQS(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-        nn_kwargs: NNKwargs = {},
-    ):
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        condition_dim = model_kwargs.get("condition_dim", None)
-        rotation = model_kwargs.get("rotation", True)
-        flow_depth = model_kwargs.get("flow_depth", 1)
-        condition_dim = model_kwargs.get("condition_dim", None)
-        nn_kwargs = configure_nn(nn_kwargs)
-
-        transforms = [
-            MaskedAffineAutoregressiveTransform(
-                features=dim, context_features=condition_dim, **nn_kwargs
-            ),
-        ]
-        if rotation:
-            transforms.append(LULinear(features=dim))
-
-        for _ in range(flow_depth):
-            transforms.append(
-                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                    features=dim,
-                    context_features=condition_dim,
-                    num_bins=num_bins,
-                    tails="linear",
-                    tail_bound=tail_bound,
-                    **nn_kwargs,
-                )
+                tail_bound=tail_bound,
+                tails="linear",
+                **nn_kwargs,
             )
-
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
-
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=StandardNormal([dim]),
         )
 
-
-class gTAF(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-        nn_kwargs: NNKwargs = {},
-    ):
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", None)
-        rotation = model_kwargs.get("rotation", True)
-        flow_depth = model_kwargs.get("flow_depth", 1)
-        condition_dim = model_kwargs.get("condition_dim", None)
-        nn_kwargs = configure_nn(nn_kwargs)
-
-        base_dist = TrainableStudentT(dim, init=tail_init)
-
-        transforms = [
-            MaskedAffineAutoregressiveTransform(
-                features=dim, context_features=condition_dim, **nn_kwargs
-            )
-        ]
-        if rotation:
-            transforms.append(LULinear(features=dim))
-
-        for _ in range(flow_depth):
-            transforms.append(
-                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                    features=dim,
-                    context_features=condition_dim,
-                    num_bins=num_bins,
-                    tails="linear",
-                    tail_bound=tail_bound,
-                    **nn_kwargs,
-                )
-            )
-
-        # all transformations are reversible
-        if use == ModelUse.variational_inference:
-            transforms = [InverseTransform(transform) for transform in transforms]
-
-        super().__init__(
-            transform=CompositeTransform(transforms),
-            distribution=base_dist,
-        )
+    return transforms
 
 
-class mTAF(Flow):
-    def __init__(
-        self,
-        dim: int,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
-    ):
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        fix_tails = model_kwargs.get("fix_tails", True)
-        rotation = model_kwargs.get("rotation", True)
-        flow_depth = model_kwargs.get("flow_depth", 1)
-        nn_activation = model_kwargs.get("nn_activation", torch.nn.functional.relu)
+def base_umn_transform(
+    dim: int,
+    *,
+    condition_dim: Optional[int] = None,
+    depth: int = 1,
+    transformation_layers: list[int] = [20, 20, 20],
+    linear_layer: bool = False,
+    random_permute: bool = False,
+    affine_autoreg_layer: bool = False,
+    householder_rotatation_layer: bool = False,
+    batch_norm: bool = False,
+    nn_kwargs: NNKwargs = {},
+) -> list[Transform]:
+    """
+    An autoregressive RQS transform of configurable depth.
+    """
+    transforms: list[Transform] = []
+    if linear_layer:
+        transforms.append(LULinear(features=dim))
 
-        assert (
-            "tail_init" in model_kwargs
-        ), "mTAF requires the marginal tails at initialisation time!"
-        assert model_kwargs["tail_init"].shape == torch.Size(
-            [dim]
-        ), "mTAF tail init must be 1 degree of freedom parameter per marginal!"
-
-        self.tail_init = model_kwargs["tail_init"]
-        self.dim = dim
-
-        # configure tails
-        num_light = int(sum(df == 0 for df in self.tail_init))
-        num_heavy = int(dim - num_light)
-        initial_permutation, permuted_degrees_of_freedom = _get_intial_permutation(
-            self.tail_init
-        )
-
-        # always perform the initial permutation
-        transforms = [initial_permutation]
+    if affine_autoreg_layer:
+        if householder_rotatation_layer:
+            transforms.append(HouseholderSequence(dim, dim))
 
         transforms.append(
             MaskedAffineAutoregressiveTransform(
                 features=dim,
-                hidden_features=num_hidden_layers,
-                num_blocks=num_hidden_layers,
-                activation=nn_activation,
+                context_features=condition_dim,
+                **nn_kwargs,
             )
         )
 
-        if rotation:
-            if (self.tail_init > 0).sum() == dim:
-                # if all are heavy we can just use standard rotation
-                transforms.append(LULinear(features=dim))
-            else:
-                # special rotation within heavy/light groups
-                transforms.append(TailLU(dim, int(num_heavy)))
+    nn_kwargs = configure_nn(nn_kwargs)
+    for _ in range(depth):
+        if batch_norm:
+            transforms.append(BatchNorm(features=dim))
 
-        for _ in range(flow_depth):
-            transforms.append(
-                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                    features=dim,
-                    hidden_features=hidden_layer_size,
-                    num_blocks=num_hidden_layers,
-                    num_bins=num_bins,
-                    tails="linear",
-                    tail_bound=tail_bound,
-                    activation=nn_activation,
-                )
+        if random_permute:
+            transforms.append(RandomPermutation(dim))
+
+        if householder_rotatation_layer:
+            transforms.append(HouseholderSequence(dim, dim))
+
+        transforms.append(
+            MaskedUMNNAutoregressiveTransform(
+                features=dim,
+                integrand_net_layers=transformation_layers,
+                **nn_kwargs,
             )
+        )
 
-        if use == ModelUse.variational_inference:
-            # avoid inverting the permutation
-            transforms = [transforms[0]] + [
-                InverseTransform(transform) for transform in transforms[1:]
-            ]
+    return transforms
 
-        # fix the base distribution if required (usually true, since we estimate tail in separate procedure)
-        base_distribution = NormalStudentTJoint(permuted_degrees_of_freedom)
-        if fix_tails:
-            for parameter in base_distribution.parameters():
-                parameter.requires_grad = False
 
-        super().__init__(
-            distribution=base_distribution,
-            transform=CompositeTransform(transforms),
+def base_affine_transform(
+    flow_depth,
+):
+    for _ in range(flow_depth):
+        transforms.append(
+            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
+                features=dim,
+                context_features=condition_dim,
+                num_bins=num_bins,
+                tails="linear",
+                tail_bound=tail_bound,
+                **nn_kwargs,
+            )
         )
 
 
-class COMET(Flow):
+def base_linear_transform(
+    flow_depth,
+):
+    for _ in range(flow_depth):
+        # transforms.append(BatchNorm(features=dim))
+        # transforms.append(LULinear(features=dim))
+        transforms.append(
+            MaskedAffineAutoregressiveTransform(
+                features=dim,
+                context_features=condition_dim,
+                # num_bins=num_bins,
+                # tails="linear",
+                # tail_bound=tail_bound,
+                **nn_kwargs,
+            )
+        )
+
+
+#######################
+# flow models
+class ExperimentFlow(Flow):
     def __init__(
         self,
-        dim: int,
-        data: torch.Tensor,
-        use: ModelUse = ModelUse.density_estimation,
-        model_kwargs: ModelKwargs = {},
+        use: ModelUse,
+        base_distribution: Distribution,
+        base_transformation_init: Optional[BaseTransform],
+        final_transformation: Transform,
+        constraint_transformation: Optional[Transform] = None,
     ):
-        assert use == ModelUse.density_estimation, "Only valid for density estimation!"
+        if base_transformation_init is None:
+            base_transformations = []
+        else:
+            base_transformations = base_transformation_init(base_distribution._shape[0])
 
-        hidden_layer_size = model_kwargs.get("hidden_layer_size", dim * 2)
-        num_hidden_layers = model_kwargs.get("num_hidden_layers", 2)
-        tail_bound = model_kwargs.get("tail_bound", 2.5)
-        num_bins = model_kwargs.get("num_bins", 8)
-        tail_init = model_kwargs.get("tail_init", None)
-        rotation = model_kwargs.get("rotation", False)
-        fix_tails = model_kwargs.get("fix_tails", True)
-
-        assert rotation == False, "Rotation not implemented for COMET flow"
-
-        tail_transform = MarginalLayer(data)
-
-        if fix_tails and tail_init is not None:
-            assert len(tail_init) == dim
-            for ix, tail_df in enumerate(tail_init):
-                if tail_df == 0.0:
-                    tail_transform.tails[ix].lower_xi = 0.0
-                    tail_transform.tails[ix].upper_xi = 0.0
-                else:
-                    tail_transform.tails[ix].lower_xi = 1 / tail_df
-                    tail_transform.tails[ix].upper_xi = 1 / tail_df
-
-        transform = CompositeTransform(
-            [
-                tail_transform,
-                Logit(),
-                MaskedAffineAutoregressiveTransform(
-                    features=dim,
-                    hidden_features=hidden_layer_size,
-                    num_blocks=num_hidden_layers,
-                ),
-                MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                    features=dim,
-                    hidden_features=hidden_layer_size,
-                    num_blocks=num_hidden_layers,
-                    num_bins=num_bins,
-                    tails="linear",
-                    tail_bound=tail_bound,
-                ),
+        # change direction of autoregression, note that this will also change
+        # forward/inverse so care is needed if direction matters
+        if use == "variational_inference":
+            base_transformations = [
+                InverseTransform(transformation)
+                for transformation in base_transformations
             ]
-        )
+
+        # transformation order is data->noise
+        transformations = [final_transformation] + base_transformations
+
+        if constraint_transformation is not None:
+            transformations = [constraint_transformation] + transformations
 
         super().__init__(
-            transform=transform,
-            distribution=StandardNormal([dim]),
+            transform=CompositeTransform(transformations),
+            distribution=base_distribution,
         )
 
 
-# map model names to appropriate class
-models: dict[ModelName, Type[Flow]] = {
-    ModelName.TTF: TTF,
-    ModelName.TTF_m: TTF_m,
-    ModelName.RQS: RQS,
-    ModelName.gTAF: gTAF,
-    ModelName.mTAF: mTAF,
-    ModelName.COMET: COMET,
-    ModelName.Copula_m: Copula_m,
-    ModelName.TTF_m_hybrid: TTF_m_hybrid,
-}
-
-
-def get_model(
-    model_name: ModelName, dim: int, cond_dim: int = 0, model_kwargs: ModelKwargs = {}
+def build_base_model(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    *,
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
 ):
+    # base distribution
+    base_distribution = StandardNormal([dim])
+
+    # final transformation
+    final_transformation = AffineMarginalTransform(dim)
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=final_transformation,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_ttf_m(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # configure model specific settings
+    pos_tail_init = model_kwargs.get("pos_tail_init", None)
+    neg_tail_init = model_kwargs.get("neg_tail_init", None)
+    fix_tails = model_kwargs.get("fix_tails", False)
+    nn_kwargs = configure_nn(nn_kwargs)
+
+    # base distribution
+    base_distribution = StandardNormal([dim])
+
+    # set up tail transform
+    tail_transform = TailAffineMarginalTransform(
+        features=dim, pos_tail_init=pos_tail_init, neg_tail_init=neg_tail_init
+    )
+
+    if fix_tails:
+        assert (
+            pos_tail_init is not None
+        ), "Fixing tails, but no init provided for pos tails"
+        assert (
+            neg_tail_init is not None
+        ), "Fixing tails, but no init provided for neg tails"
+        tail_transform.fix_tails()
+
+    # the tail transformation needs to be flipped this means data->noise is
+    # a strictly lightening transformation
+    tail_transform = flip(tail_transform)
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=tail_transform,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_gtaf(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # model specific settings
+    tail_init = model_kwargs.get("tail_init", None)  # in df terms
+
+    # base distribution
+    base_distribution = TrainableStudentT(dim, init=tail_init)
+
+    # final transformation
+    final_transformation = AffineMarginalTransform(dim)
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=final_transformation,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_mtaf(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # model specific settings
+    tail_init = model_kwargs.get("tail_init", None)  # in df terms
+    fix_tails = model_kwargs.get("fix_tails", True)
+
     assert (
-        model_name in models.keys()
-    ), f"Invalid model name {model_name} not one of {list(models.keys())}"
-    return models[model_name](dim, cond_dim, model_kwargs)
+        "tail_init" in model_kwargs
+    ), "mTAF requires the marginal tails at initialisation time!"
+    assert model_kwargs["tail_init"].shape == torch.Size(
+        [dim]
+    ), "mTAF tail init must be 1 degree of freedom parameter per marginal!"
+
+    # organise into heavy/light components
+    num_light = int(sum(df == 0 for df in tail_init))
+    num_heavy = int(dim - num_light)
+    initial_permutation, permuted_degrees_of_freedom = _get_intial_permutation(
+        tail_init
+    )
+
+    # base distribution
+    base_distribution = NormalStudentTJoint(permuted_degrees_of_freedom)
+    if fix_tails:
+        for parameter in base_distribution.parameters():
+            parameter.requires_grad = False
+
+    # base transformation
+    if base_transformations is not None and (tail_init > 0).sum() < dim:
+        # if there are light components, rotation should be a
+        # special LU rotation preserving groups of heavy/light
+        base_transformations = [
+            (
+                transformation
+                if not isinstance(transformation, LULinear)
+                else TailLU(dim, int(num_heavy))
+            )
+            for transformation in base_transformations
+        ]
+
+    # final transformation shuffles into light/heavy
+    final_transformation = CompositeTransform(
+        [
+            initial_permutation,
+            AffineMarginalTransform(dim),
+        ]
+    )
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=final_transformation,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_comet(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # comet flow expects some data to estimate properties at init time
+    # create some fake data if this isn't passed
+    data = model_kwargs.get(
+        "data", torch.distributions.Normal(0.0, 1.0).sample([1000, dim])
+    )
+    fix_tails = model_kwargs.get("fix_tails", False)
+    tail_init = model_kwargs.get("tail_init", False)
+    assert (
+        use == "density_estimation"
+    ), "COMET flows only defined for density estimation!"
+
+    # base distribution
+    base_distribution = StandardNormal([dim])
+
+    # final transformation
+    tail_transform = MarginalLayer(data)
+    if fix_tails and tail_init is not None:
+        assert len(tail_init) == dim
+        for ix, tail_df in enumerate(tail_init):
+            if tail_df == 0.0:
+                tail_transform.tails[ix].lower_xi = torch.tensor(0.001)
+                tail_transform.tails[ix].upper_xi = torch.tensor(0.001)
+            else:
+                tail_transform.tails[ix].lower_xi = 1 / tail_df
+                tail_transform.tails[ix].upper_xi = 1 / tail_df
+
+    final_transform = CompositeTransform([tail_transform, Logit()])
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=final_transform,
+        constraint_transformation=constraint_transformation,
+    )

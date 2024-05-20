@@ -1,5 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def smooth(path, w=10):
@@ -33,8 +34,6 @@ def plot_contour(
         input = torch.zeros([_x.shape[0], dim])
     else:
         input = inspect_loc.repeat(_x.shape[0], 1)
-        _x[:, 0] += inspect_loc[target_x_0]
-        _x[:, 1] += inspect_loc[target_x_1]
 
     input[:, target_x_0] = _x[:, 0]
     input[:, target_x_1] = _x[:, 1]
