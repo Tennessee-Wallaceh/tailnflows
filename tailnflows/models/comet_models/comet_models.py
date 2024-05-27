@@ -148,10 +148,10 @@ class TorchGPD(nn.Module):
             lower_cdf = self.a.detach().cpu().numpy() * (
                 1
                 - genpareto.cdf(
-                    self.alpha.detach().cpu().numpy() - lower_data,
+                    self.alpha.detach().cpu() - lower_data,
                     loc=-self.lower_mu,
                     scale=self.lower_sigma,
-                    c=self.lower_xi,
+                    c=self.lower_xi.cpu(),
                 )
             )
             lower_cdf = torch.from_numpy(lower_cdf).to(x)
@@ -162,10 +162,10 @@ class TorchGPD(nn.Module):
             upper_cdf = self.b.detach().cpu().numpy() + (
                 1 - self.b.detach().cpu().numpy()
             ) * genpareto.cdf(
-                -self.beta.detach().cpu().numpy() + upper_data,
+                -self.beta.detach().cpu() + upper_data,
                 loc=self.upper_mu,
                 scale=self.upper_sigma,
-                c=self.upper_xi,
+                c=self.upper_xi.cpu(),
             )
             upper_cdf = torch.from_numpy(upper_cdf).to(x)
 
@@ -192,7 +192,7 @@ class TorchGPD(nn.Module):
                 self.alpha.detach().cpu().numpy() - lower_data,
                 loc=-self.lower_mu,
                 scale=self.lower_sigma,
-                c=self.lower_xi,
+                c=self.lower_xi.cpu(),
             )
             lower_log_prob = torch.from_numpy(lower_log_prob).to(x)
         if self.b == 1:
@@ -204,7 +204,7 @@ class TorchGPD(nn.Module):
                 -self.beta.detach().cpu().numpy() + upper_data,
                 loc=self.upper_mu,
                 scale=self.upper_sigma,
-                c=self.upper_xi,
+                c=self.upper_xi.cpu(),
             )
             upper_log_prob = torch.from_numpy(upper_log_prob).to(x)
 
@@ -273,7 +273,7 @@ class MarginalLayer(nn.Module):
         upper_idx = int(self.b * self.n) - 1
         anchor_idxs = torch.randint(
             low=lower_idx, high=upper_idx, size=(self.n_anchors,)
-        )
+        ).to(data.device)
         self.register_buffer("anchors", data[anchor_idxs])  # sample for KDE
         self.register_buffer("alpha", data[lower_idx])  # lower data cutoff
         self.register_buffer("beta", data[upper_idx])  # upper data cutoff
@@ -282,7 +282,7 @@ class MarginalLayer(nn.Module):
         tails = []
         tail_idxs = torch.cat(
             (torch.arange(0, lower_idx), torch.arange(upper_idx, self.n - 1))
-        )
+        ).to(data.device)
         if pos_tails is None:
             pos_tails = [None] * self.d
         if neg_tails is None:
