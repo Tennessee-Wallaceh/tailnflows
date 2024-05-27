@@ -5,6 +5,7 @@ import subprocess
 import pickle
 from typing import Any
 import torch
+import multiprocessing as mp
 
 IN_COLAB = "google.colab" in sys.modules
 
@@ -88,3 +89,18 @@ def load_torch_data(path: str) -> Any:
         data = torch.load(open(rd_path, "rb"), map_location=torch.device("cpu"))
 
     return data
+
+
+def wrap_run(run_experiment):
+    def wrapped_run(exp_ix_kwargs):
+        exp_ix, kwargs = exp_ix_kwargs
+        print(f"== {exp_ix}")
+        return run_experiment(experiment_ix=exp_ix, **kwargs)
+
+    return wrapped_run
+
+
+def parallel_runner(run_experiment, experiments, max_runs=3):
+    print(f"{len(experiments)} experiments to run...")
+    with mp.Pool(max_runs) as p:
+        p.map(wrap_run(run_experiment), list(enumerate(experiments)), chunksize=1)
