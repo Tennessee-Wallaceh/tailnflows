@@ -15,4 +15,4 @@ dependencies:
   - pip:
     - posteriordb
     - git+https://github.com/Tennessee-Wallaceh/nflows
-    - git+https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow.git
+    - git+https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow
