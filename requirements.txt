@@ -1,4 +1,4 @@
-torch==2.0.1
+# torch==2.0.1
 jupyter
 matplotlib
 numpy
@@ -8,5 +8,6 @@ pandas
 seaborn
 posteriordb
 jaxtyping
+statsmodels
 nflows @ git+https://github.com/Tennessee-Wallaceh/nflows
 marginal_tail_adaptive_flows @ git+https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow

@@ -204,7 +204,7 @@ class NormalMixture(JointDistribution):
 
 class GMM(Distribution):
     """
-    Univariate Guassian Mixture Model
+    Univariate Mixture Model
     """
 
     def __init__(self, n_components):

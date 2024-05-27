@@ -4,6 +4,7 @@ import sys
 import subprocess
 import pickle
 from typing import Any
+import torch
 
 IN_COLAB = "google.colab" in sys.modules
 
@@ -77,3 +78,13 @@ def add_raw_data(path: str, label: str, data: Any, force_write: bool = False) ->
 def load_raw_data(path: str) -> Any:
     rd_path = f"{get_project_root()}/experiment_output/{path}.p"
     return pickle.load(open(rd_path, "rb"))
+
+
+def load_torch_data(path: str) -> Any:
+    rd_path = f"{get_project_root()}/data/{path}.p"
+    if not torch.cuda.is_available():
+        data = torch.load(open(rd_path, "rb"), map_location=torch.device("cpu"))
+    else:
+        data = torch.load(open(rd_path, "rb"), map_location=torch.device("cpu"))
+
+    return data

@@ -15,6 +15,7 @@ from nflows.transforms.splines.rational_quadratic import (
     unconstrained_rational_quadratic_spline_inverse,
 )
 
+from tailnflows.models.simple_spline import forward_rqs, inverse_rqs
 
 MAX_TAIL = 5.0
 LOW_TAIL_INIT = 0.1
@@ -199,6 +200,14 @@ def _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale):
     return sign * z, lad
 
 
+def _tail_affine_transform(z, pos_tail, neg_tail, shift, scale):
+    sign = torch.sign(z)
+    tail_param = torch.where(z > 0, pos_tail, neg_tail)
+    x, lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
+    lad += torch.log(scale)
+    return sign * x * scale + shift, lad
+
+
 def _tail_forward(z, pos_tail, neg_tail):
     sign = torch.sign(z)
     tail_param = torch.where(z > 0, pos_tail, neg_tail)
@@ -255,8 +264,106 @@ def _asymmetric_scale_transform_and_lad(z, pos_scale, neg_scale):
     x = 0.5 * (pos_x + neg_x - b)
 
     lad = torch.log1p((b / a) * (z / sq_plus_1))
-    lad += torch.log(a) - torch.log(torch.tensor(2.0))
+    lad -= torch.log(torch.tensor(2.0))
     return x, lad
+
+
+def _asymmetric_scale_inverse_and_lad(x, pos_scale, neg_scale):
+    a = pos_scale + neg_scale
+    b = pos_scale - neg_scale
+    disc = a**2 - b**2
+
+    z_dash = a * b + 2 * a * x
+    term_2 = (a**2 + 4 * b * x + 4 * x**2).sqrt()
+
+    z = (z_dash - torch.sign(b) * term_2) / disc
+
+    lad = torch.log(2 * a - torch.sign(b) * (2 * b + 4 * x) / term_2)
+    lad -= torch.log(disc)
+    return z, lad
+
+
+def two_scale_affine_forward(z, shift, scale_neg, scale_pos, bound=torch.tensor(1.0)):
+    # build batch x dim x knots arrays
+    derivatives = torch.ones([*z.shape, 3])
+    derivatives[:, :, 0] = scale_neg
+    derivatives[:, :, -1] = scale_pos
+
+    input_knots = torch.zeros([*z.shape, 3])
+    input_knots[:, :, 0] = -bound
+    input_knots[:, :, -1] = bound
+
+    output_knots = torch.zeros([*z.shape, 3])
+    output_knots[:, :, 0] = -bound
+    output_knots[:, :, -1] = bound
+
+    neg_region = z < -bound
+    pos_region = z > bound
+    body = ~torch.logical_or(neg_region, pos_region)
+    neg_scale_ix = (neg_region * torch.arange(z.shape[-1]))[neg_region]
+    pos_scale_ix = (pos_region * torch.arange(z.shape[-1]))[pos_region]
+
+    x = torch.empty_like(z)
+    lad = torch.empty_like(z)
+
+    x[neg_region] = (z[neg_region] + bound) * scale_neg[neg_scale_ix] - bound
+    x[pos_region] = (z[pos_region] - bound) * scale_pos[pos_scale_ix] + bound
+    lad[neg_region] = -torch.log(scale_neg[neg_scale_ix])
+    lad[pos_region] = -torch.log(scale_pos[pos_scale_ix])
+
+    body_x, body_lad = forward_rqs(
+        z[body], input_knots[body], output_knots[body], derivatives[body]
+    )
+    x[body] = body_x
+    # this has already been inverted, so undo for subsequent inversion
+    lad[body] = -body_lad
+
+    x += shift
+
+    return x, lad
+
+
+def two_scale_affine_inverse(x, shift, scale_neg, scale_pos, bound=torch.tensor(1.0)):
+    # build batch x dim x knots arrays
+    derivatives = torch.ones([*x.shape, 3])
+    derivatives[:, :, 0] = scale_neg
+    derivatives[:, :, -1] = scale_pos
+
+    input_knots = torch.zeros([*x.shape, 3])
+    input_knots[:, :, 0] = -bound
+    input_knots[:, :, -1] = bound
+
+    output_knots = torch.zeros([*x.shape, 3])
+    output_knots[:, :, 0] = -bound
+    output_knots[:, :, -1] = bound
+
+    # undo shift
+    x -= shift
+
+    # regions and place holders
+    neg_region = x < -bound
+    pos_region = x > bound
+    body = ~torch.logical_or(neg_region, pos_region)
+    neg_scale_ix = (neg_region * torch.arange(x.shape[-1]))[neg_region]
+    pos_scale_ix = (pos_region * torch.arange(x.shape[-1]))[pos_region]
+
+    z = torch.empty_like(x)
+    lad = torch.empty_like(x)
+
+    # scales
+    z[neg_region] = (x[neg_region] + bound) / scale_neg[neg_scale_ix] - bound
+    z[pos_region] = (x[pos_region] - bound) / scale_pos[pos_scale_ix] + bound
+    lad[neg_region] = torch.log(scale_neg[neg_scale_ix])
+    lad[pos_region] = torch.log(scale_pos[pos_scale_ix])
+
+    # body
+    body_z, body_lad = inverse_rqs(
+        x[body], input_knots[body], output_knots[body], derivatives[body]
+    )
+    z[body] = body_z
+    lad[body] = body_lad
+
+    return z, lad
 
 
 def flip(transform):
@@ -495,6 +602,68 @@ class TailAffineMarginalTransform(Transform):
         self._unc_neg_tail.requires_grad = False
 
 
+class MaskedAutoregressiveTailAffineMarginalTransform(AutoregressiveTransform):
+    def __init__(
+        self,
+        features,
+        context_features=None,
+        nn_kwargs={},
+    ):
+        self.features = features
+
+        nn_kwargs = configure_nn(nn_kwargs)
+        made = made_module.MADE(
+            features=features,
+            context_features=context_features,
+            output_multiplier=self._output_dim_multiplier(),
+            **nn_kwargs,
+        )
+        super(MaskedAutoregressiveTailAffineMarginalTransform, self).__init__(
+            autoregressive_net=made
+        )
+
+    def _output_dim_multiplier(self):
+        return 4
+
+    def _elementwise_forward(self, z, autoregressive_params):
+        """light -> heavy"""
+        unc_pos_tail, unc_neg_tail, unc_scale, shift_param = self._unconstrained_params(
+            autoregressive_params
+        )
+
+        pos_tail = softplus(unc_pos_tail)
+        neg_tail = softplus(unc_neg_tail)
+        shift = shift_param
+        scale = softplus(unc_scale)
+
+        x, lad = _tail_affine_transform(z, pos_tail, neg_tail, shift, scale)
+        return x, lad.sum(axis=1)
+
+    def _elementwise_inverse(self, x, autoregressive_params):
+        """heavy -> light"""
+        unc_pos_tail, unc_neg_tail, unc_scale, shift_param = self._unconstrained_params(
+            autoregressive_params
+        )
+        pos_tail = softplus(unc_pos_tail)
+        neg_tail = softplus(unc_neg_tail)
+        shift = shift_param
+        scale = softplus(unc_scale)
+
+        z, lad = _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale)
+        return z, lad.sum(axis=1)
+
+    def _unconstrained_params(self, autoregressive_params):
+        autoregressive_params = autoregressive_params.view(
+            -1, self.features, self._output_dim_multiplier()
+        )
+        return (
+            autoregressive_params[..., 0],
+            autoregressive_params[..., 1],
+            autoregressive_params[..., 2],
+            autoregressive_params[..., 3],
+        )
+
+
 class TailScaleShiftMarginalTransform(Transform):
     """
     A two tail scale version of the tail and scale transform.
@@ -524,17 +693,13 @@ class TailScaleShiftMarginalTransform(Transform):
             ).sample([features])
 
         if shift_init is None:
-            shift_init = torch.distributions.Normal(0.0, 1).sample([features])
+            shift_init = torch.zeros([features])
 
         if pos_scale_init is None:
-            pos_scale_init = softplus(
-                torch.distributions.Normal(1.0, 1).sample([features])
-            )
+            pos_scale_init = torch.ones([features])
 
         if neg_scale_init is None:
-            neg_scale_init = softplus(
-                torch.distributions.Normal(1.0, 1).sample([features])
-            )
+            neg_scale_init = torch.ones([features])
 
         assert torch.Size([features]) == pos_tail_init.shape
         assert torch.Size([features]) == neg_tail_init.shape
@@ -549,23 +714,30 @@ class TailScaleShiftMarginalTransform(Transform):
         self._unc_pos_scale = torch.nn.parameter.Parameter(inv_sftplus(pos_scale_init))
         self._unc_neg_scale = torch.nn.parameter.Parameter(inv_sftplus(neg_scale_init))
 
-    def forward(self, z, context=None):
+    def forward(self, x, context=None):
+        pos_tail = softplus(self._unc_pos_tail)
+        neg_tail = softplus(self._unc_neg_tail)
+        shift = self._unc_shift
+        pos_scale = 1e-5 + softplus(self._unc_pos_scale)
+        neg_scale = 1e-5 + softplus(self._unc_neg_scale)
 
-        raise NotImplementedError()
+        scale_z, scale_lad = two_scale_affine_inverse(x, shift, neg_scale, pos_scale)
+        z, tail_lad = _tail_inverse(scale_z, pos_tail, neg_tail)
+
+        return z, tail_lad + scale_lad.sum(axis=1)
 
     def inverse(self, z, context=None):
         """light -> heavy"""
         pos_tail = softplus(self._unc_pos_tail)
         neg_tail = softplus(self._unc_neg_tail)
         shift = self._unc_shift
-        pos_scale = softplus(self._unc_pos_scale)
-        neg_scale = softplus(self._unc_neg_scale)
+        pos_scale = 1e-5 + softplus(self._unc_pos_scale)
+        neg_scale = 1e-5 + softplus(self._unc_neg_scale)
 
-        tail_x, lad = _tail_forward(z, pos_tail, neg_tail)
-        x, lad = _asymmetric_scale_transform_and_lad(tail_x, pos_scale, neg_scale)
-        x += shift
+        tail_x, tail_lad = _tail_forward(z, pos_tail, neg_tail)
+        x, scale_lad = two_scale_affine_forward(tail_x, shift, neg_scale, pos_scale)
 
-        return x, lad.sum(axis=1)
+        return x, tail_lad + scale_lad.sum(axis=1)
 
 
 class CopulaMarginalTransform(Transform):

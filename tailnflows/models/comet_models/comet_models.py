@@ -99,7 +99,7 @@ class TorchGPD(nn.Module):
         lower_data = data[data < self.alpha].detach().cpu().numpy()
         if len(lower_data) > 1:
             self.lower_xi, self.lower_mu, self.lower_sigma = genpareto.fit(
-                self.alpha.detach().cpu().numpy() - lower_data, f0=neg_tail
+                self.alpha.detach().cpu().numpy() - lower_data, floc=0, f0=neg_tail
             )
             self.lower_xi = np.clip(
                 self.lower_xi, 0, 1
@@ -111,7 +111,7 @@ class TorchGPD(nn.Module):
         upper_data = data[data > self.beta].detach().cpu().numpy()
         if len(upper_data) > 1:
             self.upper_xi, self.upper_mu, self.upper_sigma = genpareto.fit(
-                -self.beta.detach().cpu().numpy() + upper_data, f0=pos_tail
+                -self.beta.detach().cpu().numpy() + upper_data, floc=0, f0=pos_tail
             )
             self.upper_xi = np.clip(
                 self.upper_xi, 0, 1
@@ -347,33 +347,36 @@ class MarginalLayer(nn.Module):
             x_i = x[..., i]  # assume features are in last dimension
             if not reverse:
                 # given data x, produce quantile vector u; use CDF for transformation
+                marginal_out = torch.zeros_like(x_i)
+                pdf_out = torch.zeros_like(x_i)
+
+                tail_region = torch.logical_or(x_i < self.alpha[i], x_i > self.beta[i])
+
+                # compute tail region transforms
+                marginal_out[tail_region] = self.tails[i].cdf(x_i[tail_region])
+                pdf_out[tail_region] = self.tails[i].log_prob(x_i[tail_region]).exp()
 
                 # compute CDF i wrt each anchor, then rescale with Definition 11 from Wiese and fix tails
-                kde_support = torch.from_numpy(self.mixture[i].support).to(x)
-                kde_cdf = torch.from_numpy(self.mixture[i].cdf).to(x)
-                cdf_i = Interp1d()(kde_support, kde_cdf, x_i)
+                body_x = x_i[~tail_region]
+                kde_support = torch.from_numpy(self.mixture[i].support).to(body_x)
+                kde_cdf = torch.from_numpy(self.mixture[i].cdf).to(body_x)
+                cdf_i = Interp1d()(kde_support, kde_cdf, body_x)
                 F_a = Interp1d()(kde_support, kde_cdf, self.alpha[[i]])
                 F_b = Interp1d()(kde_support, kde_cdf, self.beta[[i]])
-                cdf_i = self.a + (self.b - self.a) * (cdf_i - F_a) / (F_b - F_a)
-                cdf_i = torch.where(
-                    torch.logical_or(x_i < self.alpha[i], x_i > self.beta[i]),
-                    self.tails[i].cdf(x_i),
-                    cdf_i,
-                )
-                out.append(cdf_i.view(-1, 1))
+                marginal_out[~tail_region] = self.a + (self.b - self.a) * (
+                    cdf_i - F_a
+                ) / (F_b - F_a)
 
                 # in either direction, change in probability density is given by sum_i log|f_i(x_i)|
                 # compute log prob in data space with x_i, then rescale with Definition 11 from Wiese and fix tails
                 pdf_i = torch.from_numpy(
-                    self.mixture[i].evaluate(x_i.detach().cpu().numpy())
-                ).to(x)
-                pdf_i = (self.b - self.a) / (F_b - F_a) * pdf_i
-                pdf_i = torch.where(
-                    torch.logical_or(x_i < self.alpha[i], x_i > self.beta[i]),
-                    torch.exp(self.tails[i].log_prob(x_i)),
-                    pdf_i,
-                )
-                logpdf.append(torch.log(pdf_i.view(-1, 1)))
+                    self.mixture[i].evaluate(body_x.detach().cpu().numpy())
+                ).to(body_x)
+                pdf_out[~tail_region] = (self.b - self.a) / (F_b - F_a) * pdf_i
+
+                # add marginal values
+                out.append(marginal_out.view(-1, 1))
+                logpdf.append(torch.log(pdf_out.view(-1, 1)))
 
             else:
                 # given quantile u, produce data vector x; use inverse CDF for transformation

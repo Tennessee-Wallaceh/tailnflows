@@ -28,15 +28,18 @@ from tailnflows.models.extreme_transformations import (
     configure_nn,
     NNKwargs,
     TailAffineMarginalTransform,
-    flip,
-    TailMarginalTransform,
+    MaskedAutoregressiveTailAffineMarginalTransform,
     TailScaleShiftMarginalTransform,
-    MaskedExtremeAutoregressiveTransform,
-    CopulaMarginalTransform,
-    RQSMarginalTransform,
+    flip,
     AffineMarginalTransform,
 )
-from tailnflows.models.base_distribution import TrainableStudentT, NormalStudentTJoint
+
+from tailnflows.models.base_distribution import (
+    TrainableStudentT,
+    NormalStudentTJoint,
+    GeneralisedNormal,
+    NormalMixture,
+)
 from marginal_tail_adaptive_flows.utils.tail_permutation import (
     TailLU,
 )
@@ -171,7 +174,7 @@ def base_nsf_transform(
     linear_layer: bool = False,
     random_permute: bool = False,
     affine_autoreg_layer: bool = False,
-    householder_rotatation_layer: bool = False,
+    householder_rotation_layer: bool = False,
     batch_norm: bool = False,
     nn_kwargs: NNKwargs = {},
 ) -> list[Transform]:
@@ -179,11 +182,12 @@ def base_nsf_transform(
     An autoregressive RQS transform of configurable depth.
     """
     transforms: list[Transform] = []
+    nn_kwargs = configure_nn(nn_kwargs)
     if linear_layer:
         transforms.append(LULinear(features=dim))
 
     if affine_autoreg_layer:
-        if householder_rotatation_layer:
+        if householder_rotation_layer:
             transforms.append(HouseholderSequence(dim, dim))
 
         transforms.append(
@@ -194,7 +198,6 @@ def base_nsf_transform(
             )
         )
 
-    nn_kwargs = configure_nn(nn_kwargs)
     for _ in range(depth):
         if batch_norm:
             transforms.append(BatchNorm(features=dim))
@@ -202,7 +205,7 @@ def base_nsf_transform(
         if random_permute:
             transforms.append(RandomPermutation(dim))
 
-        if householder_rotatation_layer:
+        if householder_rotation_layer:
             transforms.append(HouseholderSequence(dim, dim))
 
         transforms.append(
@@ -274,37 +277,35 @@ def base_umn_transform(
 
 
 def base_affine_transform(
-    flow_depth,
+    dim,
+    *,
+    condition_dim: Optional[int] = None,
+    depth: int = 1,
+    linear_layer: bool = False,
+    random_permute: bool = False,
+    affine_autoreg_layer: bool = False,
+    householder_rotatation_layer: bool = False,
+    batch_norm: bool = False,
+    nn_kwargs: NNKwargs = {},
+    max_shift=1,
+    max_scale=1,
 ):
-    for _ in range(flow_depth):
-        transforms.append(
-            MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
-                features=dim,
-                context_features=condition_dim,
-                num_bins=num_bins,
-                tails="linear",
-                tail_bound=tail_bound,
-                **nn_kwargs,
-            )
-        )
+    transforms: list[Transform] = []
+    nn_kwargs = configure_nn(nn_kwargs)
+    for _ in range(depth):
+        if random_permute:
+            transforms.append(RandomPermutation(dim))
 
-
-def base_linear_transform(
-    flow_depth,
-):
-    for _ in range(flow_depth):
-        # transforms.append(BatchNorm(features=dim))
-        # transforms.append(LULinear(features=dim))
         transforms.append(
             MaskedAffineAutoregressiveTransform(
                 features=dim,
                 context_features=condition_dim,
-                # num_bins=num_bins,
-                # tails="linear",
-                # tail_bound=tail_bound,
+                max_scale=max_scale,
+                max_shift=max_shift / depth,
                 **nn_kwargs,
             )
         )
+    return transforms
 
 
 #######################
@@ -332,7 +333,10 @@ class ExperimentFlow(Flow):
             ]
 
         # transformation order is data->noise
-        transformations = [final_transformation] + base_transformations
+        transformations = [
+            final_transformation,
+            CompositeTransform(base_transformations),
+        ]
 
         if constraint_transformation is not None:
             transformations = [constraint_transformation] + transformations
@@ -411,6 +415,84 @@ def build_ttf_m(
     )
 
 
+def build_ttf_2scale_m(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # configure model specific settings
+    pos_tail_init = model_kwargs.get("pos_tail_init", None)
+    neg_tail_init = model_kwargs.get("neg_tail_init", None)
+    pos_scale_init = model_kwargs.get("pos_scale_init", None)
+    neg_scale_init = model_kwargs.get("neg_scale_init", None)
+    fix_tails = model_kwargs.get("fix_tails", False)
+    nn_kwargs = configure_nn(nn_kwargs)
+
+    # base distribution
+    base_distribution = StandardNormal([dim])
+
+    # set up tail transform
+    tail_transform = TailScaleShiftMarginalTransform(
+        features=dim,
+        pos_tail_init=pos_tail_init,
+        neg_tail_init=neg_tail_init,
+        pos_scale_init=pos_scale_init,
+        neg_scale_init=neg_scale_init,
+    )
+
+    # if fix_tails:
+    #     assert (
+    #         pos_tail_init is not None
+    #     ), "Fixing tails, but no init provided for pos tails"
+    #     assert (
+    #         neg_tail_init is not None
+    #     ), "Fixing tails, but no init provided for neg tails"
+    #     tail_transform.fix_tails()
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=tail_transform,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_ttf_autoreg(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # configure model specific settings
+    nn_kwargs = configure_nn(nn_kwargs)
+
+    # base distribution
+    base_distribution = StandardNormal([dim])
+
+    # set up tail transform
+    tail_transform = MaskedAutoregressiveTailAffineMarginalTransform(
+        features=dim, nn_kwargs=nn_kwargs
+    )
+
+    # the tail transformation needs to be flipped this means data->noise is
+    # a strictly lightening transformation
+    tail_transform = flip(tail_transform)
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=tail_transform,
+        constraint_transformation=constraint_transformation,
+    )
+
+
 def build_gtaf(
     dim: int,
     use: ModelUse = "density_estimation",
@@ -469,19 +551,6 @@ def build_mtaf(
         for parameter in base_distribution.parameters():
             parameter.requires_grad = False
 
-    # base transformation
-    if base_transformations is not None and (tail_init > 0).sum() < dim:
-        # if there are light components, rotation should be a
-        # special LU rotation preserving groups of heavy/light
-        base_transformations = [
-            (
-                transformation
-                if not isinstance(transformation, LULinear)
-                else TailLU(dim, int(num_heavy))
-            )
-            for transformation in base_transformations
-        ]
-
     # final transformation shuffles into light/heavy
     final_transformation = CompositeTransform(
         [
@@ -490,13 +559,31 @@ def build_mtaf(
         ]
     )
 
-    return ExperimentFlow(
+    mtaf = ExperimentFlow(
         use=use,
         base_distribution=base_distribution,
         base_transformation_init=base_transformation_init,
         final_transformation=final_transformation,
         constraint_transformation=constraint_transformation,
     )
+
+    # adjust base transformation
+    if base_transformation_init is not None and (tail_init > 0).sum() < dim:
+        base_transformations = mtaf._transform._transforms[-1]._transforms
+
+        # if there are light components, rotation should be a
+        # special LU rotation preserving groups of heavy/light
+        adjusted_transformations = []
+        for transformation in base_transformations:
+            if isinstance(transformation, LULinear):
+                adjusted_transformations.append(TailLU(dim, int(num_heavy)))
+            elif isinstance(transformation, HouseholderSequence):
+                raise Exception("Using non-TailLU rotation in mTAF.")
+            else:
+                adjusted_transformations.append(transformation)
+        mtaf._transform._transforms[-1] = CompositeTransform(adjusted_transformations)
+
+    return mtaf
 
 
 def build_comet(
@@ -527,8 +614,8 @@ def build_comet(
         assert len(tail_init) == dim
         for ix, tail_df in enumerate(tail_init):
             if tail_df == 0.0:
-                tail_transform.tails[ix].lower_xi = torch.tensor(0.001)
-                tail_transform.tails[ix].upper_xi = torch.tensor(0.001)
+                tail_transform.tails[ix].lower_xi = torch.tensor(1 / 1000.0)
+                tail_transform.tails[ix].upper_xi = torch.tensor(1 / 1000.0)
             else:
                 tail_transform.tails[ix].lower_xi = 1 / tail_df
                 tail_transform.tails[ix].upper_xi = 1 / tail_df
@@ -540,5 +627,54 @@ def build_comet(
         base_distribution=base_distribution,
         base_transformation_init=base_transformation_init,
         final_transformation=final_transform,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_mix_normal(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # model specific settings
+    n_component = model_kwargs.get("n_component", 10)
+
+    # base distribution
+    base_distribution = NormalMixture(dim, n_component)
+
+    # final transformation
+    final_transformation = AffineMarginalTransform(dim)
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=final_transformation,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_gen_normal(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    model_kwargs: ModelKwargs = {},
+    nn_kwargs: NNKwargs = {},
+):
+    # base distribution
+    base_distribution = GeneralisedNormal(dim)
+
+    # final transformation
+    final_transformation = AffineMarginalTransform(dim)
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=final_transformation,
         constraint_transformation=constraint_transformation,
     )
