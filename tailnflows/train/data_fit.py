@@ -14,9 +14,14 @@ def train(
     batch_size=100,
     label="",
     hook=None,
+    early_stop_patience=None,
 ):
     optimizer = Adam(list(model.parameters()), lr=lr)
-    trn_data = DataLoader(TensorDataset(x_trn), batch_size=batch_size)
+    if batch_size is None:
+        trn_data = [(x_trn,)]
+    else:
+        trn_data = DataLoader(TensorDataset(x_trn), batch_size=batch_size)
+    
     loop = tqdm.tqdm(range(num_epochs))
     losses = torch.empty(num_epochs)
     vlosses = torch.empty(num_epochs)
@@ -40,11 +45,11 @@ def train(
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                tst_loss = -model.log_prob(x_tst).mean().cpu()
+                tst_loss = -model.log_prob(x_tst).mean()
                 tst_ix = epoch
 
-            losses[epoch] = trn_loss.detach().cpu()
-            vlosses[epoch] = val_loss.detach().cpu()
+            losses[epoch] = trn_loss.detach()
+            vlosses[epoch] = val_loss.detach()
 
             loop.set_postfix(
                 {
@@ -52,4 +57,7 @@ def train(
                 }
             )
 
-    return tst_loss, tst_ix, losses, vlosses, hook_data
+            if early_stop_patience is not None and epoch - tst_ix > early_stop_patience:
+                break
+
+    return tst_loss.cpu(), tst_ix, losses.cpu(), vlosses.cpu(), hook_data
