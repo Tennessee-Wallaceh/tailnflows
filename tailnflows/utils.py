@@ -90,17 +90,15 @@ def load_torch_data(path: str) -> Any:
 
     return data
 
-
-def wrap_run(run_experiment):
-    def wrapped_run(exp_ix_kwargs):
+class RunWrapper:
+    def __init__(self, run_experiment):
+        self.run_experiment = run_experiment
+    def __call__(self, exp_ix_kwargs):
         exp_ix, kwargs = exp_ix_kwargs
-        print(f"== {exp_ix}")
-        return run_experiment(experiment_ix=exp_ix, **kwargs)
-
-    return wrapped_run
+        self.run_experiment(experiment_ix=exp_ix+ 1, **kwargs)
 
 
 def parallel_runner(run_experiment, experiments, max_runs=3):
     print(f"{len(experiments)} experiments to run...")
     with mp.Pool(max_runs) as p:
-        p.map(wrap_run(run_experiment), list(enumerate(experiments)), chunksize=1)
+        p.map(RunWrapper(run_experiment), list(enumerate(experiments)), chunksize=1)

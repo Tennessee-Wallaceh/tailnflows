@@ -1,10 +1,11 @@
 import torch
-
+from functools import partial
 from tailnflows.models import flows
 from tailnflows.train import data_fit
-from tailnflows.utils import load_torch_data, add_raw_data
+from tailnflows.utils import load_torch_data, add_raw_data, parallel_runner
 
-DEFAULT_DTYPE = torch.float64
+DEFAULT_DTYPE = torch.float32
+
 
 """
 Model specifications
@@ -97,16 +98,28 @@ def comet(dim, nuisance_df, x_trn):
 
 
 model_definitions = {
-    "normal": normal,
+    #"normal": normal,
     "ttf_m": ttf_m,
     "ttf_m_fix": ttf_m_fix,
     "mtaf": mtaf,
     "gtaf": gtaf,
-    "m_normal": m_normal,
-    "g_normal": g_normal,
-    "comet": comet,
+    #"m_normal": m_normal,
+    #"g_normal": g_normal,
+    #"comet": comet,
 }
 
+# ttf tends to converge faster, so lower num epoch
+# gtaf sometimes needs a little longer to converge
+model_opt_params = {
+    "normal": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "ttf_m": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "ttf_m_fix": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "mtaf": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "gtaf": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "m_normal": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "g_normal": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "comet": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+}
 
 """
 Experiment code
@@ -135,13 +148,16 @@ def run_experiment(
     seed,
     model_label,
     opt_params,
+    experiment_ix=1,
 ):
     # general setup
-    if torch.cuda.is_available():
-        torch.set_default_device("cuda")
-
     torch.set_default_dtype(DEFAULT_DTYPE)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.set_default_device("cuda")
+        device = "cuda"
+    else:
+        device = "cpu"
 
     # prepare data
     dataset = load_synthetic_data(dim, nuisance_df, repeat)
@@ -157,17 +173,18 @@ def run_experiment(
     model_fcn = model_definitions[model_label]
     label = model_label
 
-    model = model_fcn(dim, nuisance_df, x_trn).to(DEFAULT_DTYPE)
+    model = model_fcn(dim, nuisance_df, x_trn).to(DEFAULT_DTYPE).to(device)
 
     fit_data = data_fit.train(
         model,
-        x_trn.to(DEFAULT_DTYPE),
-        x_val.to(DEFAULT_DTYPE),
-        x_tst.to(DEFAULT_DTYPE),
+        x_trn.to(DEFAULT_DTYPE).to(device),
+        x_val.to(DEFAULT_DTYPE).to(device),
+        x_tst.to(DEFAULT_DTYPE).to(device),
         lr=opt_params["lr"],
         num_epochs=opt_params["num_epochs"],
         batch_size=opt_params["batch_size"],
-        label=f"{label}-d:{dim}-nu:{nuisance_df:.1f}",
+        early_stop_patience=opt_params["early_stop_patience"],
+        label=f"{experiment_ix}|{label}-d:{dim}-nu:{nuisance_df:.1f}",
     )
 
     tst_loss, tst_ix, losses, vlosses, hook_data = fit_data
@@ -175,7 +192,7 @@ def run_experiment(
     add_raw_data(
         out_path,
         label,
-        {"dim": dim, "repeat": repeat, "seed": seed, "tst_ll": float(tst_loss)},
+        {"dim": dim, "repeat": repeat, "seed": seed, "tst_ll": float(tst_loss), "df": nuisance_df},
         force_write=True,
     )
 
@@ -195,26 +212,28 @@ def run_experiment(
 def configured_experiments():
     model_labels = model_definitions.keys()
     seed = 2
-    opt_params = {"lr": 5e-3, "num_epochs": 10, "batch_size": 100}
-    out_path = "2024-05-synth-de-dry"
-    nusiance_dfs = [0.5, 1.0, 2.0, 30.0]
-    target_d = [5]
+    out_path = "2024-05-synth-de-earlystop"
+    nuisance_dfs = [0.5, 1.0, 2.0, 30.0]
+    target_d = [5, 10, 50]
+    num_repeats = 10
 
-    print("running")
-    for repeat in range(5):
-        for dim in target_d:
-            for nuisance_df in nusiance_dfs:
-                for model_label in model_labels:
-                    run_experiment(
-                        out_path,
-                        dim,
-                        nuisance_df,
-                        repeat,
-                        seed,
-                        model_label,
-                        opt_params,
-                    )
+    experiments = [
+        dict(
+            out_path=out_path,
+            dim=dim,
+            nuisance_df=nuisance_df,
+            repeat=repeat,
+            seed=seed,
+            model_label=model_label,
+            opt_params=model_opt_params[model_label],
+        )
+        for repeat in range(num_repeats)
+        for dim in target_d
+        for nuisance_df in nuisance_dfs
+        for model_label in model_labels
+    ]
 
+    parallel_runner(run_experiment, experiments, max_runs=3)
 
 if __name__ == "__main__":
     configured_experiments()
