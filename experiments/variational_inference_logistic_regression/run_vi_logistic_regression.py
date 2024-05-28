@@ -146,26 +146,39 @@ def importance_sampled_predictive(model, target, X_tst, y_tst, nsamp=10000):
 
 
 def run_experiment(out_path, seed, label, tst_idx, experiment_ix=1):
-    # general setup
-    if torch.cuda.is_available():
-        torch.set_default_device("cuda")
-
-    torch.set_default_dtype(DEFAULT_DTYPE)
-    torch.manual_seed(seed)
-
+    """
+    This script is a bit messy, because the Householder rotation cannot 
+    be initialised on GPU. So there is a bit of CPU-GPU converting to handle this.
+    """
+    # load data
     X_tensor, y_tensor = load_lung_cancer_data()
     d = X_tensor.shape[1]
     n = X_tensor.shape[0]
 
     param_dim = d + 1  # for bias
 
+    
+
+    # general setup
+    torch.set_default_dtype(DEFAULT_DTYPE)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.set_default_device("cuda")
+        device = "cuda"
+    else:
+        device = "cpu"
+
+    # have to create model one CPU here, as not all inits work on GPU
+    # convert to GPU later
+    model_func = model_definitions[label]
+    model = model_func(param_dim)
+
     trn_mask = torch.ones(n, dtype=torch.bool)
     trn_mask[tst_idx] = False
-
-    X_trn = X_tensor[trn_mask, :].to(torch.float32)
-    y_trn = y_tensor[trn_mask, :].to(torch.float32)
-    X_tst = X_tensor[~trn_mask, :].to(torch.float32)
-    y_tst = y_tensor[~trn_mask, :].to(torch.float32)
+    X_trn = X_tensor.to(DEFAULT_DTYPE).to(device)[trn_mask, :]
+    y_trn = y_tensor.to(DEFAULT_DTYPE).to(device)[trn_mask, :]
+    X_tst = X_tensor.to(DEFAULT_DTYPE).to(device)[~trn_mask, :]
+    y_tst = y_tensor.to(DEFAULT_DTYPE).to(device)[~trn_mask, :]
 
     # unnormalised log posterior
     def target(params):
@@ -174,8 +187,7 @@ def run_experiment(out_path, seed, label, tst_idx, experiment_ix=1):
         )
 
     # setup model, add rotation to every model
-    model_func = model_definitions[label]
-    model = model_func(param_dim)
+    model = model.to(DEFAULT_DTYPE).to(device)
     opt_param = model_opt_params[label]
 
     model._transform = CompositeTransform(
@@ -245,7 +257,7 @@ def run_experiment(out_path, seed, label, tst_idx, experiment_ix=1):
             "seed": seed,
             "tst_idx": tst_idx.cpu().numpy(),
             "losses": losses.detach().cpu(),
-        },
+        },        
         force_write=True,
     )
 
@@ -268,7 +280,7 @@ def get_splits(seed, num_test):
 def configured_experiments():
     seed = 100
     split_seed = 5
-    out_path = "2024-05-vi-real-dry"
+    out_path = "2024-05-vi-real"
     test_indexes = get_splits(split_seed, 10)
     model_labels = model_definitions.keys()
 
@@ -283,7 +295,7 @@ def configured_experiments():
         for model_label in model_labels
     ]
 
-    parallel_runner(run_experiment, experiments, max_runs=1)
+    parallel_runner(run_experiment, experiments, max_runs=2)
 
 
 if __name__ == "__main__":
