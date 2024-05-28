@@ -163,3 +163,7 @@ def configured_experiments():
             model_label,
             opt_params,
         )
+
+
+if __name__ == "__main__":
+    configured_experiments()
