@@ -98,14 +98,14 @@ def comet(dim, nuisance_df, x_trn):
 
 
 model_definitions = {
-    #"normal": normal,
-    "ttf_m": ttf_m,
-    "ttf_m_fix": ttf_m_fix,
-    "mtaf": mtaf,
-    "gtaf": gtaf,
-    #"m_normal": m_normal,
-    #"g_normal": g_normal,
-    #"comet": comet,
+    # "normal": normal,
+    # "ttf_m": ttf_m,
+    # "ttf_m_fix": ttf_m_fix,
+    # "mtaf": mtaf,
+    # "gtaf": gtaf,
+    # "m_normal": m_normal,
+    # "g_normal": g_normal,
+    "comet": comet,
 }
 
 # ttf tends to converge faster, so lower num epoch
@@ -214,7 +214,7 @@ def configured_experiments():
     seed = 2
     out_path = "2024-05-synth-de-earlystop"
     nuisance_dfs = [0.5, 1.0, 2.0, 30.0]
-    target_d = [5, 10, 50]
+    target_d = [5, 10]
     num_repeats = 10
 
     experiments = [
@@ -233,7 +233,7 @@ def configured_experiments():
         for model_label in model_labels
     ]
 
-    parallel_runner(run_experiment, experiments, max_runs=3)
+    parallel_runner(run_experiment, experiments, max_runs=5)
 
 if __name__ == "__main__":
     configured_experiments()
