@@ -4,7 +4,7 @@ from torch.optim import Adam
 import tqdm
 import argparse
 
-from tailnflows.utils import add_raw_data
+from tailnflows.utils import add_raw_data, parallel_runner
 
 # model
 from nflows.nn.nets import MLP
@@ -88,6 +88,7 @@ def run_experiment(
     lr: float,
     verbose: bool = False,
     label: str = "",
+    experiment_ix: int = 1,
 ):
     if torch.cuda.is_available():
         torch.set_default_device("cuda")
@@ -112,7 +113,7 @@ def run_experiment(
             f"Device: {phys_device}",
         )
 
-    tst_loss = fit_nn(mlp, df, dim, num_epochs, lr, label)
+    tst_loss = fit_nn(mlp, df, dim, num_epochs, lr, f'{experiment_ix}|{label}')
 
     # save results
     result = {
@@ -129,98 +130,37 @@ def configured_experiments():
     # python configuration for running number of experiments
     # uses multiprocessing to target multiple runs on 1 GPU so needs
     # to be tuned
-    import itertools
-    import multiprocessing as mp
-
-    max_runs = 2
     out_path = "2024-05-nn-nonoise-loss"
     seeds = range(3)
     dims = [5, 10, 50, 100]
     dfs = [1.0, 2.0, 5.0, 30.0]
     activations = ["sigmoid", "relu"]
+    num_repeats = 10
 
-    experiments = list(itertools.product(seeds, dims, dfs, activations))
-    sem = mp.Semaphore(max_runs)
-
-    def wrapped_run(sem, **kwargs):
-        with sem:  # limit to max runs concurrently
-            run_experiment(**kwargs)
-
-    processes = []
-    print(f"{len(experiments)} experiments to run...")
-    for exp_ix, (seed, dim, df, activation_fcn) in enumerate(experiments):
-        p = mp.Process(
-            target=wrapped_run,
-            args=(sem,),
-            kwargs=dict(
-                out_path=out_path,
-                seed=seed,
-                dim=dim,
-                activation_fcn_name=activation_fcn,
-                hidden_dims=[50, 50],
-                df=df,
-                num_epochs=5000,
-                lr=1e-3,
-                verbose=False,
-                label=f"({exp_ix})",
-            ),
+    experiments = [
+        dict(
+            out_path=out_path,
+            seed=repeat,
+            dim=dim,
+            activation_fcn_name=activation_fcn,
+            hidden_dims=[50, 50],
+            df=df,
+            num_epochs=5000,
+            lr=1e-3,
+            verbose=False,
         )
-        p.start()
-        processes.append(p)
+        for repeat in range(num_repeats) 
+        for dim in dims
+        for df in dfs
+        for activation_fcn in activations
+    ]
+
+    parallel_runner(
+        run_experiment, 
+        experiments, 
+        max_runs=5
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run the flexible tails for Normalizing Flows neural network example."
-    )
-    parser.add_argument(
-        "--out_path",
-        type=str,
-        help="output path, starting from TAILFLOWS_HOME env var",
-        required=True,
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        help="Random seed used for data gen + training",
-        required=True,
-    )
-    parser.add_argument("--dim", type=int, help="Dimension of the data", required=True)
-    parser.add_argument(
-        "--activation_fcn",
-        type=str,
-        help="Activation fcn in {'sigmoid', 'relu'}",
-        required=True,
-    )
-    parser.add_argument(
-        "--df",
-        type=float,
-        help="The nuisance df, df=0. corresponds to inf (guassian)",
-        required=True,
-    )
-    parser.add_argument(
-        "--hidden_dim_str", type=str, help="NN hidden dimensions", default="50-50"
-    )
-    parser.add_argument(
-        "--num_epochs", type=str, help="Number of train loops", default=5000
-    )
-    parser.add_argument("--lr", type=str, help="Learning rate", default=1e-3)
-    parser.add_argument(
-        "--verbose", type=bool, help="Set to True for more prints", default=False
-    )
-
-    args = parser.parse_args()
-
-    hidden_dims = [int(h_dim) for h_dim in args.hidden_dim_str.split("-")]
-
-    run_experiment(
-        out_path=args.out_path,
-        seed=args.seed,
-        dim=args.dim,
-        activation_fcn_name=args.activation_fcn,
-        hidden_dims=hidden_dims,
-        df=args.df,
-        num_epochs=args.num_epochs,
-        lr=args.lr,
-        verbose=args.verbose,
-    )
+    configured_experiments()
