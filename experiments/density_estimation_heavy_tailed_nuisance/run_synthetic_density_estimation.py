@@ -65,7 +65,7 @@ def gtaf(dim, nuisance_df, x_trn):
         use="density_estimation",
         base_transformation_init=base_transformation,
         model_kwargs=dict(
-            fix_tails=True,
+            fix_tails=False,
             tail_init=torch.distributions.Uniform(low=1.0, high=20.0).sample([dim]),
         ),
     )
@@ -111,14 +111,54 @@ model_definitions = {
 # ttf tends to converge faster, so lower num epoch
 # gtaf sometimes needs a little longer to converge
 model_opt_params = {
-    "normal": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
-    "ttf_m": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
-    "ttf_m_fix": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
-    "mtaf": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
-    "gtaf": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
-    "m_normal": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
-    "g_normal": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
-    "comet": {"lr": 5e-3, "num_epochs": 2000, "batch_size": None, "early_stop_patience": 100},    
+    "normal": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "ttf_m": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "ttf_m_fix": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "mtaf": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "gtaf": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "m_normal": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "g_normal": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "comet": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
 }
 
 """
@@ -192,7 +232,13 @@ def run_experiment(
     add_raw_data(
         out_path,
         label,
-        {"dim": dim, "repeat": repeat, "seed": seed, "tst_ll": float(tst_loss), "df": nuisance_df},
+        {
+            "dim": dim,
+            "repeat": repeat,
+            "seed": seed,
+            "tst_ll": float(tst_loss),
+            "df": nuisance_df,
+        },
         force_write=True,
     )
 
@@ -234,6 +280,7 @@ def configured_experiments():
     ]
 
     parallel_runner(run_experiment, experiments, max_runs=5)
+
 
 if __name__ == "__main__":
     configured_experiments()

@@ -1,11 +1,7 @@
-from functools import partial
-from dataclasses import dataclass
-
 import torch
-import pandas as pd
 
 from tailnflows.targets.sp500_returns import load_return_data
-from tailnflows.models.flows import TTF_m, gTAF, mTAF, ModelUse
+from tailnflows.models import flows
 from tailnflows.train import data_fit
 from tailnflows.utils import load_raw_data, add_raw_data
 
@@ -16,99 +12,56 @@ Model specifications
 """
 
 
-def base_rqs_spec(depth: int, tail_bound: float):
-    return dict(
-        rotation=True,
-        flow_depth=depth,
-        num_bins=3,
-        tail_bound=tail_bound,
+def base_rqs_spec(dim):
+    return flows.base_nsf_transform(
+        dim, num_bins=3, tail_bound=5.0, affine_autoreg_layer=True, linear_layer=True
     )
 
 
-def ttf_rqs(
-    dim: int,
-    dfs: list[float],
-    pos_dfs: list[float],
-    neg_dfs: list[float],
-    model_depth: int,
-    model_tail_bound: float,
-):
-    return TTF_m(
+def ttf_rqs(dim, dfs):
+    return flows.build_ttf_m(
         dim,
-        use=ModelUse.density_estimation,
+        use="density_estimation",
+        base_transformation_init=base_rqs_spec,
         model_kwargs=dict(
-            **base_rqs_spec(model_depth, model_tail_bound),
-            # TTF specific
-            final_affine=True,
             fix_tails=False,
-            pos_tail_init=torch.distributions.Uniform(0.05, 1.0).sample([dim]),
-            neg_tail_init=torch.distributions.Uniform(0.05, 1.0).sample([dim]),
+            pos_tail_init=torch.distributions.Uniform(low=0.05, high=1.0).sample([dim]),
+            neg_tail_init=torch.distributions.Uniform(low=0.05, high=1.0).sample([dim]),
         ),
     )
 
 
-def ttf_rqs_fix(
-    dim: int,
-    dfs: list[float],
-    pos_dfs: list[float],
-    neg_dfs: list[float],
-    model_depth: int,
-    model_tail_bound: float,
-):
-    return TTF_m(
+def ttf_rqs_fix(dim, dfs):
+    return flows.build_ttf_m(
         dim,
-        use=ModelUse.density_estimation,
+        use="density_estimation",
+        base_transformation_init=base_rqs_spec,
         model_kwargs=dict(
-            **base_rqs_spec(model_depth, model_tail_bound),
-            # TTF specific
-            final_affine=True,
             fix_tails=True,
-            pos_tail_init=torch.tensor(
-                [1 / df if df != 0.0 else 1e-4 for df in pos_dfs]
-            ),
-            neg_tail_init=torch.tensor(
-                [1 / df if df != 0.0 else 1e-4 for df in neg_dfs]
-            ),
+            pos_tail_init=torch.tensor([1 / df if df != 0.0 else 1e-4 for df in dfs]),
+            neg_tail_init=torch.tensor([1 / df if df != 0.0 else 1e-4 for df in dfs]),
         ),
     )
 
 
-def gtaf_rqs(
-    dim: int,
-    dfs: list[float],
-    pos_dfs: list[float],
-    neg_dfs: list[float],
-    model_depth: int,
-    model_tail_bound: float,
-):
-    return gTAF(
+def gtaf_rqs(dim, dfs):
+    return flows.build_gtaf(
         dim,
-        use=ModelUse.density_estimation,
+        use="density_estimation",
+        base_transformation_init=base_rqs_spec,
         model_kwargs=dict(
-            **base_rqs_spec(model_depth, model_tail_bound),
-            # gTAF specific
             fix_tails=False,
-            tail_init=1 / torch.distributions.Uniform(0.05, 1.0).sample([dim]),  # df
+            tail_init=torch.distributions.Uniform(low=1.0, high=20.0).sample([dim]),
         ),
     )
 
 
-def mtaf_rqs(
-    dim: int,
-    dfs: list[float],
-    pos_dfs: list[float],
-    neg_dfs: list[float],
-    model_depth: int,
-    model_tail_bound: float,
-):
-    return mTAF(
+def mtaf_rqs(dim, dfs):
+    return flows.build_mtaf(
         dim,
-        use=ModelUse.density_estimation,
-        model_kwargs=dict(
-            **base_rqs_spec(model_depth, model_tail_bound),
-            # mTAF specific
-            tail_init=torch.tensor(dfs),  # df
-        ),
+        use="density_estimation",
+        base_transformation_init=base_rqs_spec,
+        model_kwargs=dict(fix_tails=True, tail_init=torch.tensor(dfs)),
     )
 
 
@@ -170,11 +123,8 @@ def run_experiment(
     model = model_fcn(
         dim,
         tail_and_scale["dfs"],
-        tail_and_scale["pos_dfs"],
-        tail_and_scale["neg_dfs"],
-        model_depth=1,
-        model_tail_bound=5.0,
     ).to(DEFAULT_DTYPE)
+
     fit_data = data_fit.train(
         model,
         x_trn.to(DEFAULT_DTYPE),
