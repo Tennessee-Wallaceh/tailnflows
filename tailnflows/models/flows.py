@@ -311,6 +311,7 @@ def base_affine_transform(
 #######################
 # flow models
 class ExperimentFlow(Flow):
+    # TODO: add getter/setter for base/final transforms
     def __init__(
         self,
         use: ModelUse,

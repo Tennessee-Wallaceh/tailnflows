@@ -19,6 +19,18 @@ def ess(sample_and_log_prob, target, samples=1000):
     return ess_efficiency
 
 
+def elbo(sample_and_log_prob, target, samples=1000):
+    """
+    Produces an ESS based sample efficiency metric.
+    Usually between 0 and 1, anything not approaching 0 could be
+    workable, depending on the situation.
+    """
+    x_approx, log_q_x = sample_and_log_prob(samples)
+    log_p_x = target(x_approx)
+    log_iw = log_p_x - log_q_x
+    return log_iw.mean()
+
+
 def marginal_likelihood(sample_and_log_prob, target, e_samples=1000):
     x_approx, log_q_x = sample_and_log_prob(e_samples)
     log_p_x = target(x_approx)

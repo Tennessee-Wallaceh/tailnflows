@@ -7,6 +7,7 @@ tqdm
 pandas
 seaborn
 posteriordb
+ucimlrepo
 jaxtyping
 statsmodels
 nflows @ git+https://github.com/Tennessee-Wallaceh/nflows
