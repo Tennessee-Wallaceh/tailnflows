@@ -9,6 +9,10 @@ def inv_sftplus(x):
     return x + torch.log(-torch.expm1(-x))
 
 
+def inv_sigmoid(x):
+    return torch.log(x) - torch.log(1 - x)
+
+
 class Marginal(Transform):
     def __init__(self, dim, transform):
         super().__init__()

@@ -1,9 +1,9 @@
 import torch
-from torch.nn.functional import softplus, relu
+from torch.nn.functional import softplus, relu, sigmoid
 from nflows.transforms.autoregressive import AutoregressiveTransform
 from nflows.transforms import made as made_module
 from nflows.transforms import Transform
-from tailnflows.models.utils import inv_sftplus
+from tailnflows.models.utils import inv_sftplus, inv_sigmoid
 from typing import TypedDict, Optional, Callable
 from math import sqrt
 
@@ -28,9 +28,8 @@ PI = torch.pi
 
 class NNKwargs(TypedDict, total=False):
     hidden_features: int
-    context_features: int
     num_blocks: int
-    use_residual_blocks: int
+    use_residual_blocks: bool
     random_mask: bool
     activation: Callable
     dropout_probability: float
@@ -39,9 +38,8 @@ class NNKwargs(TypedDict, total=False):
 
 class SpecifiedNNKwargs(TypedDict, total=True):
     hidden_features: int
-    context_features: Optional[int]
     num_blocks: int
-    use_residual_blocks: int
+    use_residual_blocks: bool
     random_mask: bool
     activation: Callable
     dropout_probability: float
@@ -50,7 +48,7 @@ class SpecifiedNNKwargs(TypedDict, total=True):
 
 def configure_nn(nn_kwargs: NNKwargs) -> SpecifiedNNKwargs:
     return {
-        "hidden_features": nn_kwargs.get("hidden_features", 10),
+        "hidden_features": nn_kwargs.get("hidden_features", 5),
         "num_blocks": nn_kwargs.get("num_blocks", 2),
         "use_residual_blocks": nn_kwargs.get("use_residual_blocks", True),
         "random_mask": nn_kwargs.get("random_mask", False),
@@ -178,6 +176,60 @@ def _extreme_inverse_and_lad(x, tail_param):
     return z, lad
 
 
+def neg_extreme_transform_and_lad(z, tail_param):
+    def _small_erfcinv(log_z):
+        inner = torch.log(torch.tensor(2 / torch.pi)) - 2 * log_z
+        inner -= (torch.log(torch.tensor(2 / torch.pi)) - 2 * log_z).log()
+        return inner.pow(0.5) / SQRT_2
+
+    erfc_val = torch.erfc(z / SQRT_2)
+    g = erfc_val.pow(-tail_param)
+
+    stable_g = g > MIN_ERFC_INV
+
+    erfcinv_val = torch.zeros_like(z)
+    erfcinv_val[stable_g] = _erfcinv(g[stable_g])
+
+    log_z = -torch.log(z[~stable_g])
+    log_z += -z[~stable_g].square() / 2
+    log_z += torch.log(torch.tensor(SQRT_2 / SQRT_PI))
+    log_z *= -tail_param[~stable_g]
+
+    erfcinv_val[~stable_g] = _small_erfcinv(log_z)
+
+    x = -erfcinv_val * 2 / (SQRT_PI * tail_param)
+
+    lad = torch.square(erfcinv_val) - 0.5 * torch.square(z)
+    lad += torch.log(torch.tensor(SQRT_2 / SQRT_PI))
+    lad += (-1 - tail_param) * torch.log(erfc_val)
+
+    return x, lad
+
+
+def _tail_switch_transform(z, pos_tail, neg_tail, shift, scale):
+    sign = torch.sign(z)
+    tail_param = torch.where(z > 0, pos_tail, neg_tail)
+    heavy_tail = tail_param > 0
+    heavy_x, heavy_lad = _extreme_transform_and_lad(
+        torch.abs(z[heavy_tail]), tail_param[heavy_tail]
+    )
+    light_x, light_lad = neg_extreme_transform_and_lad(
+        torch.abs(z[~heavy_tail]), tail_param[~heavy_tail]
+    )
+
+    lad = torch.zeros_like(z)
+    x = torch.zeros_like(z)
+
+    x[heavy_tail] = heavy_x
+    x[~heavy_tail] = light_x
+
+    lad[heavy_tail] = heavy_lad
+    lad[~heavy_tail] = light_lad
+
+    lad += torch.log(scale)
+    return sign * x * scale + shift, lad
+
+
 def _tail_affine_transform(z, pos_tail, neg_tail, shift, scale):
     sign = torch.sign(z)
     tail_param = torch.where(z > 0, pos_tail, neg_tail)
@@ -198,14 +250,6 @@ def _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale):
 
     lad -= torch.log(scale)
     return sign * z, lad
-
-
-def _tail_affine_transform(z, pos_tail, neg_tail, shift, scale):
-    sign = torch.sign(z)
-    tail_param = torch.where(z > 0, pos_tail, neg_tail)
-    x, lad = _extreme_transform_and_lad(torch.abs(z), tail_param)
-    lad += torch.log(scale)
-    return sign * x * scale + shift, lad
 
 
 def _tail_forward(z, pos_tail, neg_tail):
@@ -456,7 +500,8 @@ class AffineMarginalTransform(Transform):
 
     def forward(self, z, context=None):
         shift = self._unc_shift
-        scale = softplus(self._unc_scale)
+        # scale = softplus(self._unc_scale)
+        scale = 1e-3 + softplus(self._unc_scale)
 
         x = z * scale + shift
         lad = torch.log(scale).sum()
@@ -465,7 +510,7 @@ class AffineMarginalTransform(Transform):
     def inverse(self, x, context=None):
         """heavy -> light"""
         shift = self._unc_shift
-        scale = softplus(self._unc_scale)
+        scale = 1e-3 + softplus(self._unc_scale)
 
         z = (x - shift) / scale
         lad = -torch.log(scale).sum()
@@ -581,7 +626,7 @@ class TailAffineMarginalTransform(Transform):
         pos_tail = softplus(self._unc_pos_tail)
         neg_tail = softplus(self._unc_neg_tail)
         shift = self._unc_shift
-        scale = softplus(self._unc_scale)
+        scale = 1e-3 + softplus(self._unc_scale)
 
         x, lad = _tail_affine_transform(z, pos_tail, neg_tail, shift, scale)
         return x, lad.sum(axis=1)
@@ -591,7 +636,7 @@ class TailAffineMarginalTransform(Transform):
         pos_tail = softplus(self._unc_pos_tail)
         neg_tail = softplus(self._unc_neg_tail)
         shift = self._unc_shift
-        scale = softplus(self._unc_scale)
+        scale = 1e-3 + softplus(self._unc_scale)
 
         z, lad = _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale)
         return z, lad.sum(axis=1)
@@ -600,6 +645,119 @@ class TailAffineMarginalTransform(Transform):
         # freeze only the parameters related to the tail
         self._unc_pos_tail.requires_grad = False
         self._unc_neg_tail.requires_grad = False
+
+
+class TailSwitchMarginalTransform(Transform):
+    def __init__(
+        self,
+        features,
+        pos_tail_init=None,
+        neg_tail_init=None,
+        shift_init=None,
+        scale_init=None,
+    ):
+        self.features = features
+        super(TailSwitchMarginalTransform, self).__init__()
+
+        # random inits if needed
+        if pos_tail_init is None:
+            pos_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample([features])
+
+        if neg_tail_init is None:
+            neg_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample([features])
+
+        if shift_init is None:
+            shift_init = torch.zeros([features])
+
+        if scale_init is None:
+            scale_init = torch.ones([features])
+
+        assert torch.Size([features]) == pos_tail_init.shape
+        assert torch.Size([features]) == neg_tail_init.shape
+        assert torch.Size([features]) == shift_init.shape
+        assert torch.Size([features]) == scale_init.shape
+
+        # convert to unconstrained versions
+        self._unc_pos_tail = torch.nn.parameter.Parameter(
+            inv_sftplus(pos_tail_init + 1)
+        )
+        self._unc_neg_tail = torch.nn.parameter.Parameter(
+            inv_sftplus(neg_tail_init + 1)
+        )
+        self._unc_shift = torch.nn.parameter.Parameter(shift_init)
+        self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init))
+
+    def forward(self, z, context=None):
+        pos_tail = softplus(self._unc_pos_tail) - 1.0
+        neg_tail = softplus(self._unc_neg_tail) - 1.0
+        shift = self._unc_shift
+        scale = 1e-3 + softplus(self._unc_scale)
+
+        x, lad = _tail_switch_transform(z, pos_tail, neg_tail, shift, scale)
+        return x, lad.sum(axis=1)
+
+    def inverse(self, x, context=None):
+        raise NotImplementedError
+
+    def fix_tails(self):
+        # freeze only the parameters related to the tail
+        self._unc_pos_tail.requires_grad = False
+        self._unc_neg_tail.requires_grad = False
+
+
+class MaskedTailSwitchAffineTransform(AutoregressiveTransform):
+    def __init__(
+        self,
+        features,
+        context_features=None,
+        nn_kwargs={},
+    ):
+        self.features = features
+
+        nn_kwargs = configure_nn(nn_kwargs)
+        made = made_module.MADE(
+            features=features,
+            context_features=context_features,
+            output_multiplier=self._output_dim_multiplier(),
+            **nn_kwargs,
+        )
+        super(MaskedTailSwitchAffineTransform, self).__init__(autoregressive_net=made)
+
+    def _output_dim_multiplier(self):
+        return 4
+
+    def _elementwise_forward(self, z, autoregressive_params):
+        """light -> heavy"""
+        unc_pos_tail, unc_neg_tail, unc_scale, shift_param = self._unconstrained_params(
+            autoregressive_params
+        )
+
+        pos_tail = 1.5 * sigmoid(unc_pos_tail) - 1.0
+        neg_tail = 1.5 * sigmoid(unc_neg_tail) - 1.0
+        shift = shift_param
+        scale = softplus(unc_scale)
+
+        x, lad = _tail_switch_transform(z, pos_tail, neg_tail, shift, scale)
+
+        return x, lad.sum(axis=1)
+
+    def _elementwise_inverse(self, x, autoregressive_params):
+        raise NotImplementedError
+
+    def _unconstrained_params(self, autoregressive_params):
+        autoregressive_params = autoregressive_params.view(
+            -1, self.features, self._output_dim_multiplier()
+        )
+        return (
+            autoregressive_params[..., 0],
+            autoregressive_params[..., 1],
+            autoregressive_params[..., 2],
+            autoregressive_params[..., 3],
+        )
 
 
 class MaskedAutoregressiveTailAffineMarginalTransform(AutoregressiveTransform):
