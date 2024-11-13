@@ -143,15 +143,15 @@ def _extreme_transform_and_lad(z, tail_param):
     return x, lad
 
 
-def _small_erfcinv(x, tail_param):
+def _small_erfcinv(log_g):
     """
     Use series expansion for erfcinv(x) as x->0, using subsitution for
     log x^-2
     """
-    log_z_sq = 2 * torch.log(1 + x * tail_param) / tail_param
+    log_z_sq = 2 * log_g
 
-    inner = torch.log(torch.tensor(2 / PI)) + log_z_sq
-    inner -= (torch.log(torch.tensor(2 / PI)) + log_z_sq).log()
+    inner = torch.log(torch.tensor(2 / PI)) - log_z_sq
+    inner -= (torch.log(torch.tensor(2 / PI)) - log_z_sq).log()
 
     z = inner.pow(0.5) / SQRT_2
 
@@ -165,7 +165,9 @@ def _extreme_inverse_and_lad(x, tail_param):
 
     erfcinv_val = torch.zeros_like(x)
     erfcinv_val[stable_g] = _erfcinv(g[stable_g])
-    erfcinv_val[~stable_g] = _small_erfcinv(x[~stable_g], tail_param[~stable_g])
+
+    log_g = -torch.log(inner[~stable_g]) / tail_param[~stable_g]
+    erfcinv_val[~stable_g] = _small_erfcinv(log_g)
 
     z = SQRT_2 * erfcinv_val
 
