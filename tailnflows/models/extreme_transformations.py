@@ -6,6 +6,10 @@ from nflows.transforms import Transform
 from tailnflows.models.utils import inv_sftplus, inv_sigmoid
 from typing import TypedDict, Optional, Callable
 from math import sqrt
+from tailnflows.models.simple_spline import (
+    univariate_forward_rqs,
+    univariate_inverse_rqs,
+)
 
 from nflows.transforms.splines import rational_quadratic
 from nflows.transforms.splines.rational_quadratic import (
@@ -116,6 +120,32 @@ def _erfcinv(x):
     return -torch.special.ndtri(0.5 * x) / SQRT_2
 
 
+def _small_erfcinv(log_g):
+    """
+    Use series expansion for erfcinv(x) as x->0
+    """
+    log_z_sq = 2 * log_g
+
+    inner = torch.log(torch.tensor(2 / PI)) - log_z_sq
+    inner -= (torch.log(torch.tensor(2 / PI)) - log_z_sq).log()
+
+    z = inner.sqrt() / SQRT_2
+
+    return z
+
+
+def _stable_erfcinv(x, log_x):
+    with torch.no_grad():
+        standard_x = torch.clamp(x, min=MIN_ERFC_INV, max=None)
+        small_log_x = torch.clamp(log_x, min=None, max=torch.tensor(MIN_ERFC_INV).log())
+
+    return torch.where(
+        x > MIN_ERFC_INV,
+        -torch.special.ndtri(0.5 * standard_x) / SQRT_2,
+        _small_erfcinv(small_log_x),
+    )
+
+
 def _shift_power_transform_and_lad(z, tail_param):
     transformed = (SQRT_2 / SQRT_PI) * (torch.pow(1 + z / tail_param, tail_param) - 1)
     lad = (tail_param - 1) * torch.log(1 + z / tail_param)
@@ -143,31 +173,11 @@ def _extreme_transform_and_lad(z, tail_param):
     return x, lad
 
 
-def _small_erfcinv(log_g):
-    """
-    Use series expansion for erfcinv(x) as x->0, using subsitution for
-    log x^-2
-    """
-    log_z_sq = 2 * log_g
-
-    inner = torch.log(torch.tensor(2 / PI)) - log_z_sq
-    inner -= (torch.log(torch.tensor(2 / PI)) - log_z_sq).log()
-
-    z = inner.pow(0.5) / SQRT_2
-
-    return z
-
-
 def _extreme_inverse_and_lad(x, tail_param):
     inner = 1 + tail_param * x
     g = torch.pow(inner, -1 / tail_param)
-    stable_g = g > MIN_ERFC_INV
-
-    erfcinv_val = torch.zeros_like(x)
-    erfcinv_val[stable_g] = _erfcinv(g[stable_g])
-
-    log_g = -torch.log(inner[~stable_g]) / tail_param[~stable_g]
-    erfcinv_val[~stable_g] = _small_erfcinv(log_g)
+    log_g = -torch.log(inner) / tail_param
+    erfcinv_val = _stable_erfcinv(g, log_g)
 
     z = SQRT_2 * erfcinv_val
 
@@ -621,26 +631,32 @@ class TailAffineMarginalTransform(Transform):
         # convert to unconstrained versions
         self._unc_pos_tail = torch.nn.parameter.Parameter(inv_sftplus(pos_tail_init))
         self._unc_neg_tail = torch.nn.parameter.Parameter(inv_sftplus(neg_tail_init))
-        self._unc_shift = torch.nn.parameter.Parameter(shift_init)
+        self.shift = torch.nn.parameter.Parameter(shift_init)
         self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init))
 
-    def forward(self, z, context=None):
-        pos_tail = softplus(self._unc_pos_tail)
-        neg_tail = softplus(self._unc_neg_tail)
-        shift = self._unc_shift
-        scale = 1e-3 + softplus(self._unc_scale)
+    @property
+    def pos_tail(self):
+        return softplus(self._unc_pos_tail)
 
-        x, lad = _tail_affine_transform(z, pos_tail, neg_tail, shift, scale)
+    @property
+    def neg_tail(self):
+        return softplus(self._unc_neg_tail)
+
+    @property
+    def scale(self):
+        return 1e-3 + softplus(self._unc_scale)
+
+    def forward(self, z, context=None):
+        x, lad = _tail_affine_transform(
+            z, self.pos_tail, self.neg_tail, self.shift, self.scale
+        )
         return x, lad.sum(axis=1)
 
     def inverse(self, x, context=None):
         """heavy -> light"""
-        pos_tail = softplus(self._unc_pos_tail)
-        neg_tail = softplus(self._unc_neg_tail)
-        shift = self._unc_shift
-        scale = 1e-3 + softplus(self._unc_scale)
-
-        z, lad = _tail_affine_inverse(x, pos_tail, neg_tail, shift, scale)
+        z, lad = _tail_affine_inverse(
+            x, self.pos_tail, self.neg_tail, self.shift, self.scale
+        )
         return z, lad.sum(axis=1)
 
     def fix_tails(self):
@@ -665,12 +681,12 @@ class TailSwitchMarginalTransform(Transform):
         if pos_tail_init is None:
             pos_tail_init = torch.distributions.Uniform(
                 LOW_TAIL_INIT, HIGH_TAIL_INIT
-            ).sample([features])
+            ).sample(torch.Size([features]))
 
         if neg_tail_init is None:
             neg_tail_init = torch.distributions.Uniform(
                 LOW_TAIL_INIT, HIGH_TAIL_INIT
-            ).sample([features])
+            ).sample(torch.Size([features]))
 
         if shift_init is None:
             shift_init = torch.zeros([features])
@@ -684,26 +700,578 @@ class TailSwitchMarginalTransform(Transform):
         assert torch.Size([features]) == scale_init.shape
 
         # convert to unconstrained versions
-        self._unc_pos_tail = torch.nn.parameter.Parameter(
-            inv_sftplus(pos_tail_init + 1)
+        self._pos_tail = torch.nn.parameter.Parameter(pos_tail_init)
+        self._neg_tail = torch.nn.parameter.Parameter(neg_tail_init)
+        self.shift = torch.nn.parameter.Parameter(shift_init)
+        self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init - 1e-3))
+
+    @staticmethod
+    def _tail_parameterisation(z):
+
+        out, _ = torch.vmap(
+            univariate_forward_rqs, in_dims=(0, None, None, None), out_dims=(0, 0)
+        )(
+            z.reshape(-1, 1).clamp(min=-0.5 + 1e-6, max=0.5 - 1e-6),
+            torch.tensor([[-0.5, 0.0, 0.5]]),
+            torch.tensor([[-0.5, 0.0, 0.5]]),
+            torch.tensor([[1.0, 0.2, 1.0]]),
         )
-        self._unc_neg_tail = torch.nn.parameter.Parameter(
-            inv_sftplus(neg_tail_init + 1)
+
+        out = torch.where(
+            z.abs() < 0.5,
+            out.reshape(-1),
+            z,
         )
-        self._unc_shift = torch.nn.parameter.Parameter(shift_init)
-        self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init))
+        return out
 
-    def forward(self, z, context=None):
-        pos_tail = softplus(self._unc_pos_tail) - 1.0
-        neg_tail = softplus(self._unc_neg_tail) - 1.0
-        shift = self._unc_shift
-        scale = 1e-3 + softplus(self._unc_scale)
+    def forward(self, x, context=None):
+        # affine
+        x = (x - self.shift) / self.scale
 
-        x, lad = _tail_switch_transform(z, pos_tail, neg_tail, shift, scale)
-        return x, lad.sum(axis=1)
+        sign = torch.sign(x)
+        tail_param = torch.where(x > 0, self.pos_tail, self.neg_tail)
 
-    def inverse(self, x, context=None):
-        raise NotImplementedError
+        # negative tail param as this is being applied in data -> noise
+        # so data has tail_param tail
+        z, lad = TailSwitchMarginalTransform._transformation(torch.abs(x), -tail_param)
+        lad -= torch.log(self.scale)
+        return sign * z, lad.sum(dim=1)
+
+    def inverse(self, z, context=None):
+        sign = torch.sign(z)
+        tail_param = torch.where(
+            z > 0,
+            self.pos_tail,
+            self.neg_tail,
+        )
+        x, lad = TailSwitchMarginalTransform._transformation(torch.abs(z), tail_param)
+        lad += torch.log(self.scale)
+        x = sign * x * self.scale + self.shift
+        return x, lad.sum(dim=1)
+
+    @property
+    def scale(self):
+        return 1e-3 + softplus(self._unc_scale)
+
+    @property
+    def pos_tail(self):
+        return self._tail_parameterisation(self._pos_tail)
+
+    @property
+    def neg_tail(self):
+        return self._tail_parameterisation(self._neg_tail)
+
+    def fix_tails(self):
+        # freeze only the parameters related to the tail
+        self._unc_pos_tail.requires_grad = False
+        self._unc_neg_tail.requires_grad = False
+
+    @staticmethod
+    def extreme_transform(z, tau):
+        # tau > 1
+        tail_param = (tau - 1).abs()
+        g = torch.erfc(z / SQRT_2)
+        x = (torch.pow(g, -tail_param) - 1) / tail_param
+        x *= SQRT_PI / SQRT_2
+
+        lad = torch.log(g) * (-tail_param - 1)
+        lad -= 0.5 * torch.square(z)
+
+        return x, lad
+
+    @staticmethod
+    def asymp_h_transform(z):
+        g = torch.erfc(z / SQRT_2)
+        return -torch.log(g) * SQRT_PI / SQRT_2
+
+    @staticmethod
+    def inter_h_transform(z, tau):
+        # tau in [0, 1]
+        tail_param = tau - 1
+        g = torch.erfc(z / SQRT_2)
+        x = -_erfcinv(g.pow(-tail_param))
+        x *= SQRT_2 / tail_param
+
+        lad = torch.log(g) * (-tail_param - 1)
+        lad -= 0.5 * torch.square(z)
+        lad += 0.5 * tail_param.square() * x.square()
+
+        return x, lad
+
+    @staticmethod
+    def inter_l_transform(z, tau):
+        # tau in [-1, 0]
+        tail_param = -tau - 1  # tail_param = 1 - (tau - 1)
+        inner = torch.erfc(-tail_param * z / SQRT_2)
+
+        g = torch.pow(inner, -1 / tail_param)
+        log_g = -torch.log(inner) / tail_param
+
+        erfcinv_val = _stable_erfcinv(g, log_g)
+
+        x = SQRT_2 * erfcinv_val
+
+        lad = -0.5 * tail_param.square() * z.square()
+        lad += (-1 - 1 / tail_param) * torch.log(inner)
+        lad += torch.square(erfcinv_val)
+
+        return x, lad
+
+    @staticmethod
+    def asymp_l_transform(z):
+        g = torch.exp(-(SQRT_2 / SQRT_PI) * z)
+        return SQRT_2 * _erfcinv(g)
+
+    @staticmethod
+    def extreme_inverse(z, tau):
+        # tau < -1
+        tail_param = -tau - 1
+
+        inner = 1 + tail_param * (SQRT_2 / SQRT_PI) * z
+
+        g = torch.pow(inner, -1 / tail_param)
+        log_g = -torch.log(inner) / tail_param
+
+        erfcinv_val = _stable_erfcinv(g, log_g)
+        x = SQRT_2 * erfcinv_val
+
+        lad = (-1 - 1 / tail_param) * torch.log(inner)
+        lad += torch.square(erfcinv_val)
+
+        return x, lad
+
+    @staticmethod
+    def _transformation(z, tau):
+        if tau.shape[0] == 1:  # fixed parameter for each observation
+            tau = tau.repeat((z.shape[0], 1))
+
+        assert (
+            z.shape[1] == tau.shape[1]
+        ), f"Tail parameter must be 2D [1, {z.shape[1]}] or {z.shape[1]}"
+
+        heavy_tail = tau > 1
+        light_tail = tau < -1
+        iheavy = torch.logical_and(~heavy_tail, ~light_tail)
+        iheavy = torch.logical_and(iheavy, tau >= 0)
+        ilight = torch.logical_and(~heavy_tail, ~light_tail)
+        ilight = torch.logical_and(ilight, tau < 0)
+
+        heavy_x, heavy_lad = TailSwitchMarginalTransform.extreme_transform(
+            z[heavy_tail], tau[heavy_tail]
+        )
+        iheavy_x, iheavy_lad = TailSwitchMarginalTransform.inter_h_transform(
+            z[iheavy], tau[iheavy]
+        )
+        ilight_x, ilight_lad = TailSwitchMarginalTransform.inter_l_transform(
+            z[ilight], tau[ilight]
+        )
+        light_x, light_lad = TailSwitchMarginalTransform.extreme_inverse(
+            z[light_tail], tau[light_tail]
+        )
+
+        x = torch.ones_like(z)
+        lad = torch.ones_like(z)
+
+        for index, x_val, lad_val in (
+            (heavy_tail, heavy_x, heavy_lad),
+            (iheavy, iheavy_x, iheavy_lad),
+            (ilight, ilight_x, ilight_lad),
+            (light_tail, light_x, light_lad),
+        ):
+            x[index] = x_val
+            lad[index] = lad_val
+        return x, lad
+
+
+class SmoothTailSwitchMarginalTransform(Transform):
+    def __init__(
+        self,
+        features,
+        pos_tail_init=None,
+        neg_tail_init=None,
+        shift_init=None,
+        scale_init=None,
+    ):
+        self.features = features
+        super(SmoothTailSwitchMarginalTransform, self).__init__()
+
+        # random inits if needed
+        if pos_tail_init is None:
+            pos_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample(torch.Size([features]))
+
+        if neg_tail_init is None:
+            neg_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample(torch.Size([features]))
+
+        if shift_init is None:
+            shift_init = torch.zeros([features])
+
+        if scale_init is None:
+            scale_init = torch.ones([features])
+
+        assert torch.Size([features]) == pos_tail_init.shape
+        assert torch.Size([features]) == neg_tail_init.shape
+        assert torch.Size([features]) == shift_init.shape
+        assert torch.Size([features]) == scale_init.shape
+
+        # convert to unconstrained versions
+        self.pos_tail = torch.nn.parameter.Parameter(pos_tail_init)
+        self.neg_tail = torch.nn.parameter.Parameter(neg_tail_init)
+        self.shift = torch.nn.parameter.Parameter(shift_init)
+        self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init - 1e-3))
+
+        self._tail_forward = torch.vmap(
+            SmoothTailSwitchMarginalTransform.univariate_smooth_ex_transform,
+            in_dims=(1, 0, 0),
+            out_dims=(1, 1),
+        )
+
+        self._tail_inverse = torch.vmap(
+            SmoothTailSwitchMarginalTransform.univariate_smooth_ex_inverse,
+            in_dims=(1, 0, 0),
+            out_dims=(1, 1),
+        )
+
+    def forward(self, x, context=None):
+        # affine
+        x = (x - self.shift) / self.scale
+        z, lad = self._tail_inverse(x, self.pos_tail, self.neg_tail)
+        lad -= torch.log(self.scale)
+        return z, lad.sum(dim=1)
+
+    def inverse(self, z, context=None):
+        x, lad = self._tail_forward(z, self.pos_tail, self.neg_tail)
+        lad += torch.log(self.scale)
+        x = x * self.scale + self.shift
+        return x, lad.sum(dim=1)
+
+    @property
+    def scale(self):
+        return 1e-3 + softplus(self._unc_scale)
+
+    def fix_tails(self):
+        # freeze only the parameters related to the tail
+        self._unc_pos_tail.requires_grad = False
+        self._unc_neg_tail.requires_grad = False
+
+    @staticmethod
+    def _real_transformation(z, pos_tau, neg_tau):
+        tau = torch.where(z > 0, pos_tau, neg_tau)
+        x, lad = SmoothTailSwitchMarginalTransform._tail_transformation(z.abs(), tau)
+        return x * z.sign(), lad
+
+    @staticmethod
+    def _tail_transformation(z, tau):
+        heavy_tail = tau > 1
+        light_tail = tau < -1
+        iheavy = torch.logical_and(~heavy_tail, ~light_tail)
+        iheavy = torch.logical_and(iheavy, tau >= 0)
+        ilight = torch.logical_and(~heavy_tail, ~light_tail)
+        ilight = torch.logical_and(ilight, tau < 0)
+
+        heavy_x, heavy_lad = TailSwitchMarginalTransform.extreme_transform(
+            z, torch.clamp(tau, min=1.0 + 1e-6, max=None)
+        )
+        iheavy_x, iheavy_lad = TailSwitchMarginalTransform.inter_h_transform(
+            z, torch.clamp(tau, min=0.0 - 1e-6, max=1.0 + 1e-6)
+        )
+        ilight_x, ilight_lad = TailSwitchMarginalTransform.inter_l_transform(
+            z, torch.clamp(tau, min=-1.0 - 1e-6, max=0.0)
+        )
+        light_x, light_lad = TailSwitchMarginalTransform.extreme_inverse(
+            z, torch.clamp(tau, min=None, max=-1.0 - 1e-6)
+        )
+
+        x = torch.ones_like(z)
+        lad = torch.ones_like(z)
+
+        for index, x_val, lad_val in (
+            (heavy_tail, heavy_x, heavy_lad),
+            (iheavy, iheavy_x, iheavy_lad),
+            (ilight, ilight_x, ilight_lad),
+            (light_tail, light_x, light_lad),
+        ):
+            x = torch.where(index, x_val, x)
+            lad = torch.where(index, lad_val, lad)
+
+        return x, lad
+
+    @staticmethod
+    def univariate_smooth_ex_transform(z, pos_tau, neg_tau):
+        knot_z = torch.tensor([-1.6, 1.6]).reshape(-1, 1)
+
+        # calculate spline data
+        knot_x, forward_lad = SmoothTailSwitchMarginalTransform._real_transformation(
+            knot_z,
+            pos_tau,
+            neg_tau,
+        )
+
+        # prepare data for spline
+        input_knots = knot_z.squeeze().repeat((z.shape[0], 1))
+        output_knots = knot_x.squeeze().repeat((z.shape[0], 1))
+        derivatives = forward_lad.squeeze().repeat((z.shape[0], 1)).exp()
+
+        spline_x, spline_lad = univariate_forward_rqs(
+            z.clamp(min=knot_z[0, 0] + 1e-6, max=knot_z[1, 0] - 1e-6),
+            input_knots,
+            output_knots,
+            derivatives,
+        )
+
+        ex_x, ex_lad = SmoothTailSwitchMarginalTransform._real_transformation(
+            z, pos_tau, neg_tau
+        )
+
+        within = torch.logical_and(
+            z < knot_z[1],
+            z > knot_z[0],
+        )
+        x = torch.where(within, spline_x, ex_x)
+        lad = torch.where(within, spline_lad, ex_lad)
+
+        return x, lad
+
+    @staticmethod
+    def univariate_smooth_ex_inverse(x, pos_tau, neg_tau):
+        knot_z = torch.tensor([-1.6, 1.6]).reshape(-1, 1)
+
+        # calculate spline data
+        knot_x, forward_lad = SmoothTailSwitchMarginalTransform._real_transformation(
+            knot_z,
+            pos_tau,
+            neg_tau,
+        )
+
+        # prepare data for spline
+        input_knots = knot_z.squeeze().repeat((x.shape[0], 1))
+        output_knots = knot_x.squeeze().repeat((x.shape[0], 1))
+        derivatives = forward_lad.squeeze().repeat((x.shape[0], 1)).exp()
+
+        spline_z, spline_lad = univariate_inverse_rqs(
+            x.clamp(min=output_knots[:, 0] + 1e-6, max=output_knots[:, 1] - 1e-6),
+            input_knots,
+            output_knots,
+            derivatives,
+        )
+
+        # inverse is negative tail param
+        ex_z, ex_lad = SmoothTailSwitchMarginalTransform._real_transformation(
+            x, -pos_tau, -neg_tau
+        )
+
+        within = torch.logical_and(
+            x < output_knots[:, 1],
+            x > output_knots[:, 0],
+        )
+        z = torch.where(within, spline_z, ex_z)
+        lad = torch.where(within, spline_lad, ex_lad)
+
+        return z, lad
+
+
+class InterpMarginalTransform(Transform):
+    def __init__(
+        self,
+        features,
+        pos_tail_init=None,
+        neg_tail_init=None,
+        shift_init=None,
+        scale_init=None,
+    ):
+        self.features = features
+        super(InterpMarginalTransform, self).__init__()
+
+        # random inits if needed
+        if pos_tail_init is None:
+            pos_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample(torch.Size([features]))
+
+        if neg_tail_init is None:
+            neg_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample(torch.Size([features]))
+
+        if shift_init is None:
+            shift_init = torch.zeros([features])
+
+        if scale_init is None:
+            scale_init = torch.ones([features])
+
+        assert torch.Size([features]) == pos_tail_init.shape
+        assert torch.Size([features]) == neg_tail_init.shape
+        assert torch.Size([features]) == shift_init.shape
+        assert torch.Size([features]) == scale_init.shape
+
+        # convert to unconstrained versions
+        self.pos_tail = torch.nn.parameter.Parameter(pos_tail_init)
+        self.neg_tail = torch.nn.parameter.Parameter(neg_tail_init)
+        self.shift = torch.nn.parameter.Parameter(shift_init)
+        self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init - 1e-3))
+
+    def inverse(self, z, context=None):
+        sign = torch.sign(z)
+        tail_param = torch.where(
+            z > 0,
+            self.pos_tail,
+            self.neg_tail,
+        )
+        x, lad = InterpMarginalTransform._transformation(torch.abs(z), tail_param)
+        lad += torch.log(self.scale)
+        x = sign * x * self.scale + self.shift
+        return x, lad.sum(dim=1)
+
+    def forward(self, x, context=None):
+        # affine
+        x = (x - self.shift) / self.scale
+
+        sign = torch.sign(x)
+        tail_param = torch.where(x > 0, self.pos_tail, self.neg_tail)
+
+        z, lad = InterpMarginalTransform._transformation(
+            torch.abs(x), tail_param, inverse=True
+        )
+        lad -= torch.log(self.scale)
+        return sign * z, lad.sum(dim=1)
+
+    @staticmethod
+    def interpolated_transformation(z, tail_param):
+        # interpolated
+        intermediate_tail_p = (0.5 * (tail_param + 1)).abs()  # always in [0, 1]
+        _y = torch.exp(-torch.tensor(SQRT_2 / SQRT_PI) * z)
+        stable_y = _y > MIN_ERFC_INV
+
+        erfcinv_y = torch.zeros_like(_y)
+        erfcinv_y[stable_y] = _erfcinv(_y[stable_y])
+        erfcinv_y[~stable_y] = _small_erfcinv(-z[~stable_y])
+
+        low = SQRT_2 * erfcinv_y
+
+        dlow_dx = torch.exp(erfcinv_y.square() - torch.tensor(SQRT_2 / SQRT_PI) * z)
+
+        high = torch.where(
+            torch.erfc(z / SQRT_2) > MIN_ERFC_INV,
+            -torch.erfc(z / SQRT_2).log(),
+            z.log() + 0.5 * z.square() + torch.log(torch.tensor(SQRT_PI / SQRT_2)),
+        ) * torch.tensor(SQRT_PI / SQRT_2)
+        dhigh_dx = torch.where(
+            z < 10,
+            torch.exp(-0.5 * z.square()) / torch.erfc(z / SQRT_2),
+            torch.tensor(SQRT_PI / SQRT_2) * z,
+        )
+
+        intermediate_x = intermediate_tail_p * high + (1 - intermediate_tail_p) * low
+
+        # this could be unstable
+        intermediate_lad = intermediate_tail_p * dhigh_dx
+        intermediate_lad += (1 - intermediate_tail_p) * dlow_dx
+        intermediate_lad = intermediate_lad.log()
+
+        return intermediate_x, intermediate_lad
+
+    @staticmethod
+    def bisection_search(func, z_0_low, z_0_high, target, tol=1e-6, max_iter=100):
+        for i in range(max_iter):
+            z_mid = 0.5 * (z_0_low + z_0_high)
+            f_mid = func(z_mid)
+            error = target - f_mid
+            if (error.abs() < tol).all():
+                return z_mid
+
+            z_0_low = torch.where(error < 0, z_0_low, z_mid)
+            z_0_high = torch.where(error > 0, z_0_high, z_mid)
+
+        return 0.5 * (z_0_low + z_0_high)
+
+    @staticmethod
+    def interpolated_inverse(x, tail_param):
+        interpolated_transformation = (
+            InterpMarginalTransform.interpolated_transformation
+        )
+        # interpolated
+        low, _ = interpolated_transformation(x, torch.ones_like(x) * -1)
+        high, _ = interpolated_transformation(x, torch.ones_like(x))
+
+        z_0_low = torch.minimum(low, high)
+        z_0_high = torch.maximum(low, high)
+
+        def forward(z):
+            return interpolated_transformation(z, tail_param)[0]
+
+        z = InterpMarginalTransform.bisection_search(forward, z_0_low, z_0_high, x)
+        _, inv_lad = interpolated_transformation(z.detach(), tail_param)
+        lad = -inv_lad
+        return z, lad
+
+    @staticmethod
+    def _transformation(z, tail_param, inverse=False):
+        interpolated_inverse = InterpMarginalTransform.interpolated_inverse
+        interpolated_transformation = (
+            InterpMarginalTransform.interpolated_transformation
+        )
+
+        if inverse:
+            tail_param = -tail_param
+
+        if tail_param.shape[0] == 1:  # fixed parameter for each observation
+            tail_param = tail_param.repeat((z.shape[0], 1))
+
+        assert (
+            z.shape[1] == tail_param.shape[1]
+        ), f"Tail parameter must be 2D [1, {z.shape[1]}] or {z.shape[1]}"
+
+        heavy_tails = tail_param > 1
+        light_tails = tail_param < -1
+
+        # fatten the tails
+        heavy_tail_p = (tail_param - 1).abs()  # lambda - 1 should always be positive
+        g = torch.erfc(z / SQRT_2)
+        heavy_x = (torch.pow(g, -heavy_tail_p) - 1) / heavy_tail_p
+        heavy_x *= torch.tensor(SQRT_PI / SQRT_2)
+
+        heavy_lad = torch.log(g) * (-heavy_tail_p - 1)
+        heavy_lad -= 0.5 * torch.square(z)
+
+        # lighten the tails
+        light_tail_p = (
+            torch.abs(tail_param) - 1
+        ).abs()  # |lambda| - 1 should always be positive
+        inner = 1 + torch.tensor(SQRT_2 / SQRT_PI) * light_tail_p * z
+        g = torch.pow(inner, -1 / light_tail_p)
+        stable_g = g > MIN_ERFC_INV
+
+        erfcinv_val = torch.zeros_like(z)
+        erfcinv_val[stable_g] = _erfcinv(g[stable_g])
+        log_g = -torch.log(inner[~stable_g]) / tail_param[~stable_g]
+        erfcinv_val[~stable_g] = _small_erfcinv(log_g)
+        light_x = SQRT_2 * erfcinv_val
+
+        light_lad = (-1 - 1 / light_tail_p) * torch.log(inner)
+        light_lad += torch.square(erfcinv_val)
+
+        if inverse:
+            intermediate_x, intermediate_lad = interpolated_inverse(z, -tail_param)
+        else:
+            intermediate_x, intermediate_lad = interpolated_transformation(
+                z, tail_param
+            )
+
+        # implicitly, where not heavy or light tailed it is intermediate
+        x = torch.where(heavy_tails, heavy_x, intermediate_x)
+        x = torch.where(light_tails, light_x, x)
+
+        lad = torch.where(heavy_tails, heavy_lad, intermediate_lad)
+        lad = torch.where(light_tails, light_lad, lad)
+
+        return x, lad
+
+    @property
+    def scale(self):
+        return 1e-3 + softplus(self._unc_scale)
 
     def fix_tails(self):
         # freeze only the parameters related to the tail
