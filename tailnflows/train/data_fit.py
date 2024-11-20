@@ -15,13 +15,22 @@ def train(
     label="",
     hook=None,
     early_stop_patience=None,
+    grad_clip=None,
+    optimizer=None,
 ):
-    optimizer = Adam(list(model.parameters()), lr=lr)
+    parameters = list(model.parameters())
+    if optimizer is None:
+        optimizer = Adam(parameters, lr=lr)
+
     if batch_size is None:
         trn_data = [(x_trn,)]
     else:
-        trn_data = DataLoader(TensorDataset(x_trn), batch_size=batch_size)
-    
+        trn_data = DataLoader(
+            TensorDataset(x_trn),
+            batch_size=batch_size,
+            shuffle=True,
+        )
+
     loop = tqdm.tqdm(range(num_epochs))
     losses = torch.empty(num_epochs)
     vlosses = torch.empty(num_epochs)
@@ -31,11 +40,20 @@ def train(
     tst_ix = -1
     for epoch in loop:
         # mini batch
+        epoch_loss = 0.0
         for (subset,) in trn_data:
             optimizer.zero_grad()
-            trn_loss = -model.log_prob(subset).mean()
+            batch_loss = -model.log_prob(subset).sum()
+            trn_loss = batch_loss.mean()
             trn_loss.backward()
+
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(parameters, grad_clip)
+
             optimizer.step()
+            epoch_loss += batch_loss
+
+        epoch_loss /= x_trn.shape[0]
 
         with torch.no_grad():
             if hook is not None:
@@ -48,12 +66,12 @@ def train(
                 tst_loss = -model.log_prob(x_tst).mean()
                 tst_ix = epoch
 
-            losses[epoch] = trn_loss.detach()
+            losses[epoch] = epoch_loss.detach()
             vlosses[epoch] = val_loss.detach()
 
             loop.set_postfix(
                 {
-                    "loss": f"{losses[-1]:.2f} ({vlosses[-1]:.2f}) {label}: *{tst_loss.detach()/x_trn.shape[-1]:.3f} @ {tst_ix}"
+                    "loss": f"{losses[epoch]:.2f} ({vlosses[epoch]:.2f}) {label}: *{tst_loss.detach():.3f} @ {tst_ix}"
                 }
             )
 
