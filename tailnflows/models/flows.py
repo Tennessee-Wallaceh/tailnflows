@@ -28,8 +28,11 @@ from tailnflows.models.extreme_transformations import (
     configure_nn,
     NNKwargs,
     TailAffineMarginalTransform,
+    InterpMarginalTransform,
+    MaskedExtremeAutoregressiveTransform,
     MaskedAutoregressiveTailAffineMarginalTransform,
     TailScaleShiftMarginalTransform,
+    SmoothTailSwitchMarginalTransform,
     flip,
     AffineMarginalTransform,
     TailSwitchMarginalTransform,
@@ -189,7 +192,6 @@ def base_nsf_transform(
             MaskedAffineAutoregressiveTransform(
                 features=dim,
                 context_features=condition_dim,
-                use_bias=True,
                 **specified_nn_kwargs,
             )
         )
@@ -205,9 +207,9 @@ def base_nsf_transform(
                 num_bins=num_bins,
                 tail_bound=tail_bound,
                 tails="linear",
-                min_bin_width=0.2,
-                min_bin_height=0.2,
-                min_derivative=0.1,
+                # min_bin_width=0.1,
+                # min_bin_height=0.1,
+                # min_derivative=0.1,
                 **specified_nn_kwargs,
             )
         )
@@ -224,7 +226,6 @@ def base_umn_transform(
     linear_layer: bool = False,
     random_permute: bool = False,
     affine_autoreg_layer: bool = False,
-    householder_rotatation_layer: bool = False,
     batch_norm: bool = False,
     nn_kwargs: NNKwargs = {},
 ) -> list[Transform]:
@@ -236,9 +237,6 @@ def base_umn_transform(
         transforms.append(LULinear(features=dim))
 
     if affine_autoreg_layer:
-        if householder_rotatation_layer:
-            transforms.append(HouseholderSequence(dim, dim))
-
         transforms.append(
             MaskedAffineAutoregressiveTransform(
                 features=dim,
@@ -254,9 +252,6 @@ def base_umn_transform(
 
         if random_permute:
             transforms.append(RandomPermutation(dim))
-
-        if householder_rotatation_layer:
-            transforms.append(HouseholderSequence(dim, dim))
 
         transforms.append(
             MaskedUMNNAutoregressiveTransform(
@@ -287,7 +282,6 @@ def base_affine_transform(
             MaskedAffineAutoregressiveTransform(
                 features=dim,
                 context_features=condition_dim,
-                use_bias=False,
                 **specified_nn_kwargs,
             )
         )
@@ -411,8 +405,8 @@ def build_ttf_m(
     # set up tail transform
     tail_transform = TailAffineMarginalTransform(
         features=dim,
-        pos_tail_init=torch.tensor(pos_tail_init),
-        neg_tail_init=torch.tensor(neg_tail_init),
+        pos_tail_init=pos_tail_init,
+        neg_tail_init=neg_tail_init,
     )
 
     if fix_tails:
@@ -438,6 +432,53 @@ def build_ttf_m(
     )
 
 
+def build_ttf_interp(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    final_rotation: FinalRotation = None,
+    model_kwargs: ModelKwargs = {},
+):
+    # configure model specific settings
+    pos_tail_init = model_kwargs.get("pos_tail_init", None)
+    neg_tail_init = model_kwargs.get("neg_tail_init", None)
+    fix_tails = model_kwargs.get("fix_tails", False)
+
+    # base distribution
+    base_distribution = StandardNormal([dim])
+
+    # set up tail transform
+    tail_transform = InterpMarginalTransform(
+        features=dim,
+        pos_tail_init=pos_tail_init,
+        neg_tail_init=neg_tail_init,
+    )
+
+    if fix_tails:
+        assert (
+            pos_tail_init is not None
+        ), "Fixing tails, but no init provided for pos tails"
+        assert (
+            neg_tail_init is not None
+        ), "Fixing tails, but no init provided for neg tails"
+        tail_transform.fix_tails()
+
+    # by default the numerical inversion is in generation direction
+    # if using for VI we want sampling to be quick
+    if use == "variational_inference":
+        tail_transform = flip(tail_transform)
+
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=tail_transform,
+        final_rotation=final_rotation,
+        constraint_transformation=constraint_transformation,
+    )
+
+
 def build_ttf_switch_m(
     dim: int,
     use: ModelUse = "density_estimation",
@@ -446,7 +487,6 @@ def build_ttf_switch_m(
     final_rotation: FinalRotation = None,
     model_kwargs: ModelKwargs = {},
 ):
-    assert use == "variational_inference", "VI only!"
     # configure model specific settings
     pos_tail_init = model_kwargs.get("pos_tail_init", None)
     neg_tail_init = model_kwargs.get("neg_tail_init", None)
@@ -471,9 +511,47 @@ def build_ttf_switch_m(
         ), "Fixing tails, but no init provided for neg tails"
         tail_transform.fix_tails()
 
-    # the tail transformation needs to be flipped this means data->noise is
-    # a strictly lightening transformation
-    tail_transform = flip(tail_transform)
+    return ExperimentFlow(
+        use=use,
+        base_distribution=base_distribution,
+        base_transformation_init=base_transformation_init,
+        final_transformation=tail_transform,
+        final_rotation=final_rotation,
+        constraint_transformation=constraint_transformation,
+    )
+
+
+def build_ttf_smooth_m(
+    dim: int,
+    use: ModelUse = "density_estimation",
+    base_transformation_init: Optional[BaseTransform] = None,
+    constraint_transformation: Optional[Transform] = None,
+    final_rotation: FinalRotation = None,
+    model_kwargs: ModelKwargs = {},
+):
+    # configure model specific settings
+    pos_tail_init = model_kwargs.get("pos_tail_init", None)
+    neg_tail_init = model_kwargs.get("neg_tail_init", None)
+    fix_tails = model_kwargs.get("fix_tails", False)
+
+    # base distribution
+    base_distribution = StandardNormal([dim])
+
+    # set up tail transform
+    tail_transform = SmoothTailSwitchMarginalTransform(
+        features=dim,
+        pos_tail_init=torch.tensor(pos_tail_init),
+        neg_tail_init=torch.tensor(neg_tail_init),
+    )
+
+    if fix_tails:
+        assert (
+            pos_tail_init is not None
+        ), "Fixing tails, but no init provided for pos tails"
+        assert (
+            neg_tail_init is not None
+        ), "Fixing tails, but no init provided for neg tails"
+        tail_transform.fix_tails()
 
     return ExperimentFlow(
         use=use,
@@ -498,7 +576,7 @@ def build_ttf_autoreg(
     base_distribution = StandardNormal([dim])
 
     # set up tail transform
-    tail_transform = MaskedTailSwitchAffineTransform(
+    tail_transform = MaskedExtremeAutoregressiveTransform(
         features=dim, nn_kwargs=configure_nn(nn_kwargs)
     )
 
@@ -600,7 +678,7 @@ def build_mtaf(
     )
 
     # adjust the final rotation transformation
-    if final_transformation is not None and (tail_init > 0).sum() < dim:
+    if final_rotation is not None and (tail_init > 0).sum() < dim:
         mtaf.set_final_rotation(TailLU(dim, int(num_heavy)))
 
     # check for any rotations in the base transformation, these invalidate the
