@@ -78,4 +78,15 @@ def load_climdex_data():
     data_test = torch.tensor(to_stacked_array(ds_test)[0].to_numpy())
     data_val = torch.tensor(to_stacked_array(ds_validation)[0].to_numpy())
 
-    return data_train, data_val, data_test
+    # always apply this reordering used in paper
+    permutation = list(range(80)) # light-tailed temperature
+    # light-tailed pressure
+    pressure_light = list(range(137, 237))
+    pressure_light.reverse()
+    permutation += pressure_light
+    permutation += list(range(137+100+38, 137 + 100 + 38 + 58)) # light-tailed depth
+    permutation += list(range(80, 137)) # heavy-tailed temperature
+    permutation += list(range(137+100, 137+100+38)) # heavy-tailed pressure
+    permutation += list(range(137 + 100 + 38 + 58, data_train.shape[1])) # heavy-tailed depth
+
+    return data_train[:, permutation], data_val[:, permutation], data_test[:, permutation]
