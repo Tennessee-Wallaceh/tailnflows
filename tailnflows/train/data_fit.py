@@ -17,10 +17,20 @@ def train(
     early_stop_patience=None,
     grad_clip=None,
     optimizer=None,
+    lr_scheduler=None,
+    preprocess_transformation=None,
+    num_evals=None,
 ):
     parameters = list(model.parameters())
     if optimizer is None:
         optimizer = Adam(parameters, lr=lr)
+
+    if num_evals is None:
+        num_evals = num_epochs
+
+    if preprocess_transformation is not None:
+        x_trn, _ = preprocess_transformation(x_trn)
+        x_val, _ = preprocess_transformation(x_val)
 
     if batch_size is None:
         trn_data = [(x_trn,)]
@@ -38,6 +48,8 @@ def train(
     tst_loss = torch.tensor(torch.inf)
     best_val_loss = torch.tensor(torch.inf)
     tst_ix = -1
+    eval_period = int(num_epochs / num_evals)
+
     for epoch in loop:
         # mini batch
         epoch_loss = 0.0
@@ -55,27 +67,38 @@ def train(
 
         epoch_loss /= x_trn.shape[0]
 
-        with torch.no_grad():
-            if hook is not None:
-                hook(model, hook_data)
+        if lr_scheduler is not None:
+            lr_scheduler.step()
 
-            val_loss = -model.log_prob(x_val).mean()
+        if epoch % eval_period == 0:
+            with torch.no_grad():
+                if hook is not None:
+                    hook(model, hook_data)
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                tst_loss = -model.log_prob(x_tst).mean()
-                tst_ix = epoch
+                val_loss = -model.log_prob(x_val).mean()
 
-            losses[epoch] = epoch_loss.detach()
-            vlosses[epoch] = val_loss.detach()
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    if preprocess_transformation is not None:
+                        x_pre, pre_process_lad = preprocess_transformation(x_tst)
+                        tst_loss = -(model.log_prob(x_pre) + pre_process_lad).mean()
+                    else:
+                        tst_loss = -model.log_prob(x_tst).mean()
+                    tst_ix = epoch
 
-            loop.set_postfix(
-                {
-                    "loss": f"{losses[epoch]:.2f} ({vlosses[epoch]:.2f}) {label}: *{tst_loss.detach():.3f} @ {tst_ix}"
-                }
-            )
+                losses[epoch] = epoch_loss.detach()
+                vlosses[epoch] = val_loss.detach()
 
-            if early_stop_patience is not None and epoch - tst_ix > early_stop_patience:
-                break
+                loop.set_postfix(
+                    {
+                        "loss": f"{losses[epoch]:.2f} ({vlosses[epoch]:.2f}) {label}: *{tst_loss.detach():.3f} @ {tst_ix}"
+                    }
+                )
+
+                if (
+                    early_stop_patience is not None
+                    and epoch - tst_ix > early_stop_patience
+                ):
+                    break
 
     return tst_loss.cpu(), tst_ix, losses.cpu(), vlosses.cpu(), hook_data
