@@ -647,6 +647,7 @@ class TailAffineMarginalTransform(Transform):
         return 1e-3 + softplus(self._unc_scale)
 
     def forward(self, z, context=None):
+        """light -> heavy"""
         x, lad = _tail_affine_transform(
             z, self.pos_tail, self.neg_tail, self.shift, self.scale
         )
