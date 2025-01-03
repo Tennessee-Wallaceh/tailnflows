@@ -137,7 +137,7 @@ def _small_erfcinv(log_g):
 def _stable_erfcinv(x, log_x):
     with torch.no_grad():
         standard_x = torch.clamp(x, min=MIN_ERFC_INV, max=None)
-        small_log_x = torch.clamp(log_x, min=None, max=torch.tensor(MIN_ERFC_INV).log())
+        small_log_x = torch.clamp(log_x, min=None, max=torch.tensor(MIN_ERFC_INV, device=log_x.device).log())
 
     return torch.where(
         x > MIN_ERFC_INV,
