@@ -151,7 +151,7 @@ class TorchGPD(nn.Module):
                     self.alpha.detach().cpu() - lower_data,
                     loc=-self.lower_mu,
                     scale=self.lower_sigma,
-                    c=self.lower_xi.cpu(),
+                    c=self.lower_xi,
                 )
             )
             lower_cdf = torch.from_numpy(lower_cdf).to(x)
@@ -165,7 +165,7 @@ class TorchGPD(nn.Module):
                 -self.beta.detach().cpu() + upper_data,
                 loc=self.upper_mu,
                 scale=self.upper_sigma,
-                c=self.upper_xi.cpu(),
+                c=self.upper_xi,
             )
             upper_cdf = torch.from_numpy(upper_cdf).to(x)
 
@@ -192,7 +192,7 @@ class TorchGPD(nn.Module):
                 self.alpha.detach().cpu().numpy() - lower_data,
                 loc=-self.lower_mu,
                 scale=self.lower_sigma,
-                c=self.lower_xi.cpu(),
+                c=self.lower_xi,
             )
             lower_log_prob = torch.from_numpy(lower_log_prob).to(x)
         if self.b == 1:
@@ -204,7 +204,7 @@ class TorchGPD(nn.Module):
                 -self.beta.detach().cpu().numpy() + upper_data,
                 loc=self.upper_mu,
                 scale=self.upper_sigma,
-                c=self.upper_xi.cpu(),
+                c=self.upper_xi,
             )
             upper_log_prob = torch.from_numpy(upper_log_prob).to(x)
 
