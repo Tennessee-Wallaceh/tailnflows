@@ -179,6 +179,7 @@ def base_nsf_transform(
     tail_bound: float = 3.0,
     random_permute: bool = False,
     affine_autoreg_layer: bool = False,
+    linear_layer: bool = False,
     nn_kwargs: NNKwargs = {},
 ) -> list[Transform]:
     """
@@ -196,9 +197,12 @@ def base_nsf_transform(
             )
         )
 
-    for _ in range(depth):
-        if random_permute:
+    for layer in range(depth):
+        if layer > 0 and random_permute:
             transforms.append(RandomPermutation(dim))
+
+        if layer > 0 and linear_layer:
+            transforms.append(LULinear(dim, identity_init=True))
 
         transforms.append(
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
@@ -207,9 +211,6 @@ def base_nsf_transform(
                 num_bins=num_bins,
                 tail_bound=tail_bound,
                 tails="linear",
-                # min_bin_width=0.1,
-                # min_bin_height=0.1,
-                # min_derivative=0.1,
                 **specified_nn_kwargs,
             )
         )
