@@ -2,7 +2,6 @@ from tailnflows.utils import get_project_root, get_data_path
 import pandas as pd
 import numpy as np
 import torch
-import json
 
 
 def load_return_data(top_n_symbols):
@@ -39,4 +38,5 @@ def load_return_data(top_n_symbols):
         else:
             joined_data = joined_data.join(new_data)
 
-    return joined_data[wanted_symbols], wanted_symbols
+    df = joined_data[wanted_symbols]
+    return torch.tensor(df.to_numpy()), wanted_symbols
