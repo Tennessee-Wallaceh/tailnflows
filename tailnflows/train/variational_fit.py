@@ -82,6 +82,7 @@ def train(
     weight_decay=0.0,
     hook=None,
     restart_epoch=None,
+    bootstrap_metrics=False
 ):
     """
     Runs a variational fit to a potentially unormalised target density.
@@ -113,7 +114,7 @@ def train(
 
             grad_norm = torch.nn.utils.clip_grad_norm_(parameters, grad_clip_norm)
 
-            if torch.isfinite(grad_norm):
+            if torch.isfinite(loss) and torch.isfinite(grad_norm):
                 optimizer.step()
 
             if restart_epoch is not None and epoch == restart_epoch:
@@ -133,18 +134,24 @@ def train(
                 if epoch == num_epochs - 1:
                     x_approx, log_q_x = model.sample_and_log_prob(metric_samples)
                     log_p_x = target(x_approx)
-                    replications = 1000
 
-                    tst_ess = bootstrap_metric(log_p_x, log_q_x, replications, ess)
+                    if bootstrap_metrics:
+                        replications = 1000
 
-                    tst_elbo = bootstrap_metric(log_p_x, log_q_x, replications, elbo)
+                        tst_ess = bootstrap_metric(log_p_x, log_q_x, replications, ess)
 
-                    tst_cubo = bootstrap_metric(
-                        log_p_x,
-                        log_q_x,
-                        replications,
-                        lambda x, y: cubo(x, y, compute_grad=False),
-                    )
+                        tst_elbo = bootstrap_metric(log_p_x, log_q_x, replications, elbo)
+
+                        tst_cubo = bootstrap_metric(
+                            log_p_x,
+                            log_q_x,
+                            replications,
+                            lambda x, y: cubo(x, y, compute_grad=False),
+                        )
+                    else:
+                        tst_ess = [ess(log_p_x, log_q_x)]
+                        tst_elbo = [elbo(log_p_x, log_q_x)]
+                        tst_cubo = [cubo(log_p_x, log_q_x, compute_grad=False)]
 
                     tst_psis = (psis_index(log_p_x, log_q_x),)
 

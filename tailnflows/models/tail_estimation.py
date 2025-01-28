@@ -4,6 +4,7 @@ import numpy as np
 import os, sys
 import matplotlib.pyplot as plt
 from marginal_tail_adaptive_flows.utils.tail_estimation import make_plots
+from math import log
 
 class HiddenPrints:
     def __enter__(self):
@@ -25,15 +26,23 @@ def estimate_df(marginal_data, verbose=True):
     with warnings.catch_warnings():
         with HiddenPrints():
             warnings.simplefilter("ignore")
+
+            n = marginal_data.shape[0]
+            t_bootstrap = 0.5
+            eps_bootstrap = 0.5 * (1 + log(int(t_bootstrap * n)) / log(n))
+            n1 = int(n ** eps_bootstrap)
+            n2 = int(n1 * n1 / float(n))
+            hsteps = min(n2 - 1, 200) # adjust down in low data setting
+
             tail_estimators = make_plots(
                 ordered_data, 
                 output_file_path='tst', 
                 number_of_bins=30,
                 r_smooth=2, 
                 alpha=0.6, 
-                hsteps=200, 
+                hsteps=hsteps, 
                 bootstrap_flag=1, 
-                t_bootstrap=0.5,
+                t_bootstrap=t_bootstrap,
                 r_bootstrap=500, 
                 diagn_plots=False, 
                 eps_stop=eps_stop, 
