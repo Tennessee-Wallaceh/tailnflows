@@ -133,7 +133,6 @@ class ConstraintTransform(Transform):
 
         return outputs, logabsdet
 
-
 class Softplus(Transform):
     """
     Softplus non-linearity
@@ -177,8 +176,6 @@ class UnitLULinear(LULinear):
         # Strictly speaking, 'softplus(raw_centered)' isn't exactly e^(raw_centered)
         return diag
     
-
-
 class MaskedAffineAutoregressiveTransform(AutoregressiveTransform):
     """
     Small adjustment to Affine MAF, to allow constrained scales
@@ -542,138 +539,6 @@ def build_ttf_m(
         final_rotation=final_rotation,
         constraint_transformation=constraint_transformation,
     )
-
-
-def build_ttf_interp(
-    dim: int,
-    use: ModelUse = "density_estimation",
-    base_transformation_init: Optional[BaseTransform] = None,
-    constraint_transformation: Optional[Transform] = None,
-    final_rotation: FinalRotation = None,
-    model_kwargs: ModelKwargs = {},
-):
-    # configure model specific settings
-    pos_tail_init = model_kwargs.get("pos_tail_init", None)
-    neg_tail_init = model_kwargs.get("neg_tail_init", None)
-    fix_tails = model_kwargs.get("fix_tails", False)
-
-    # base distribution
-    base_distribution = StandardNormal([dim])
-
-    # set up tail transform
-    tail_transform = InterpMarginalTransform(
-        features=dim,
-        pos_tail_init=torch.tensor(pos_tail_init),
-        neg_tail_init=torch.tensor(neg_tail_init),
-    )
-
-    if fix_tails:
-        assert (
-            pos_tail_init is not None
-        ), "Fixing tails, but no init provided for pos tails"
-        assert (
-            neg_tail_init is not None
-        ), "Fixing tails, but no init provided for neg tails"
-        tail_transform.fix_tails()
-
-    # by default the numerical inversion is in generation direction
-    # if using for VI we want sampling to be quick
-    if use == "variational_inference":
-        tail_transform = flip(tail_transform)
-
-    return ExperimentFlow(
-        use=use,
-        base_distribution=base_distribution,
-        base_transformation_init=base_transformation_init,
-        final_transformation=tail_transform,
-        final_rotation=final_rotation,
-        constraint_transformation=constraint_transformation,
-    )
-
-
-def build_ttf_switch_m(
-    dim: int,
-    use: ModelUse = "density_estimation",
-    base_transformation_init: Optional[BaseTransform] = None,
-    constraint_transformation: Optional[Transform] = None,
-    final_rotation: FinalRotation = None,
-    model_kwargs: ModelKwargs = {},
-):
-    # configure model specific settings
-    pos_tail_init = model_kwargs.get("pos_tail_init", None)
-    neg_tail_init = model_kwargs.get("neg_tail_init", None)
-    fix_tails = model_kwargs.get("fix_tails", False)
-
-    # base distribution
-    base_distribution = StandardNormal([dim])
-
-    # set up tail transform
-    tail_transform = TailSwitchMarginalTransform(
-        features=dim,
-        pos_tail_init=torch.tensor(pos_tail_init),
-        neg_tail_init=torch.tensor(neg_tail_init),
-    )
-
-    if fix_tails:
-        assert (
-            pos_tail_init is not None
-        ), "Fixing tails, but no init provided for pos tails"
-        assert (
-            neg_tail_init is not None
-        ), "Fixing tails, but no init provided for neg tails"
-        tail_transform.fix_tails()
-
-    return ExperimentFlow(
-        use=use,
-        base_distribution=base_distribution,
-        base_transformation_init=base_transformation_init,
-        final_transformation=tail_transform,
-        final_rotation=final_rotation,
-        constraint_transformation=constraint_transformation,
-    )
-
-
-def build_ttf_smooth_m(
-    dim: int,
-    use: ModelUse = "density_estimation",
-    base_transformation_init: Optional[BaseTransform] = None,
-    constraint_transformation: Optional[Transform] = None,
-    final_rotation: FinalRotation = None,
-    model_kwargs: ModelKwargs = {},
-):
-    # configure model specific settings
-    pos_tail_init = model_kwargs.get("pos_tail_init", None)
-    neg_tail_init = model_kwargs.get("neg_tail_init", None)
-    fix_tails = model_kwargs.get("fix_tails", False)
-
-    # base distribution
-    base_distribution = StandardNormal([dim])
-
-    # set up tail transform
-    tail_transform = SmoothTailSwitchMarginalTransform(
-        features=dim,
-        pos_tail_init=torch.tensor(pos_tail_init),
-        neg_tail_init=torch.tensor(neg_tail_init),
-    )
-
-    if fix_tails:
-        assert (
-            pos_tail_init is not None
-        ), "Fixing tails, but no init provided for pos tails"
-        assert (
-            neg_tail_init is not None
-        ), "Fixing tails, but no init provided for neg tails"
-        tail_transform.fix_tails()
-
-    return ExperimentFlow(
-        use=use,
-        base_distribution=base_distribution,
-        base_transformation_init=base_transformation_init,
-        final_transformation=tail_transform,
-        final_rotation=final_rotation,
-        constraint_transformation=constraint_transformation,
-    )
-
 
 def build_ttf_autoreg(
     dim: int,
