@@ -2,20 +2,22 @@ from enum import Enum
 from typing import TypedDict, Optional, Type, Callable, Literal, Union
 import torch
 
-from torch.nn.functional import logsigmoid
+from torch.nn.functional import logsigmoid, softplus
 
 # nflows dependencies
 from nflows.flows import Flow
 from nflows.distributions import Distribution
 from nflows.distributions.normal import StandardNormal
 from nflows.transforms.autoregressive import (
-    MaskedAffineAutoregressiveTransform,
+    AutoregressiveTransform,
     MaskedPiecewiseRationalQuadraticAutoregressiveTransform,
     MaskedUMNNAutoregressiveTransform,
 )
+from nflows.utils import torchutils
+from nflows.transforms import made as made_module
 from nflows.transforms.lu import LULinear
 from nflows.transforms.base import CompositeTransform, InverseTransform
-from nflows.transforms.nonlinearities import Logit
+# from nflows.transforms.nonlinearities import Logit
 from nflows.transforms import Permutation
 from nflows.transforms.normalization import BatchNorm
 from nflows.transforms.base import Transform
@@ -48,7 +50,7 @@ from tailnflows.models.base_distribution import (
 from marginal_tail_adaptive_flows.utils.tail_permutation import (
     TailLU,
 )
-from tailnflows.models.comet_models import MarginalLayer
+from tailnflows.models.comet_models import MarginalLayer, Logit
 
 
 def _get_intial_permutation(degrees_of_freedom):
@@ -163,7 +165,97 @@ class Softplus(Transform):
 
         return z, lad.sum(axis=1)
 
+class UnitLULinear(LULinear):
+    @property
+    def upper_diag(self):
+        # Suppose self.unconstrained_upper_diag is shape (D,)
+        raw = self.unconstrained_upper_diag
+        # Center them so the average is zero => product of exp() is 1
+        raw_centered = raw - torch.mean(raw)
+        # Then exponentiate + shift with eps for positivity
+        diag = torch.exp(raw_centered) + self.eps
+        # Strictly speaking, 'softplus(raw_centered)' isn't exactly e^(raw_centered)
+        return diag
+    
 
+
+class MaskedAffineAutoregressiveTransform(AutoregressiveTransform):
+    """
+    Small adjustment to Affine MAF, to allow constrained scales
+    """
+    def __init__(
+        self,
+        features,
+        hidden_features,
+        context_features=None,
+        num_blocks=2,
+        use_residual_blocks=True,
+        random_mask=False,
+        activation=torch.nn.functional.relu,
+        dropout_probability=0.0,
+        use_batch_norm=False,
+        scale_constraint=None,
+    ):
+        self.features = features
+        made = made_module.MADE(
+            features=features,
+            hidden_features=hidden_features,
+            context_features=context_features,
+            num_blocks=num_blocks,
+            output_multiplier=self._output_dim_multiplier(),
+            use_residual_blocks=use_residual_blocks,
+            random_mask=random_mask,
+            activation=activation,
+            dropout_probability=dropout_probability,
+            use_batch_norm=use_batch_norm,
+        )
+        self._epsilon = 1e-3
+
+        if scale_constraint is None:
+            def constrain(unc_scale):
+                return softplus(unc_scale) + 1e-3
+
+            self.scale_constraint = constrain
+        else:
+            self.scale_constraint = scale_constraint
+
+        super(MaskedAffineAutoregressiveTransform, self).__init__(made)
+
+    def _output_dim_multiplier(self):
+        return 2
+
+    def _elementwise_forward(self, inputs, autoregressive_params):
+        unconstrained_scale, shift = self._unconstrained_scale_and_shift(
+            autoregressive_params
+        )
+        scale = self.scale_constraint(unconstrained_scale)
+        log_scale = torch.log(scale)
+        outputs = scale * inputs + shift
+        logabsdet = torchutils.sum_except_batch(log_scale, num_batch_dims=1)
+        return outputs, logabsdet
+
+    def _elementwise_inverse(self, inputs, autoregressive_params):
+        unconstrained_scale, shift = self._unconstrained_scale_and_shift(
+            autoregressive_params
+        )
+        scale = self.scale_constraint(unconstrained_scale)
+        log_scale = torch.log(scale)
+        outputs = (inputs - shift) / scale
+        logabsdet = -torchutils.sum_except_batch(log_scale, num_batch_dims=1)
+        return outputs, logabsdet
+
+    def _unconstrained_scale_and_shift(self, autoregressive_params):
+        # split_idx = autoregressive_params.size(1) // 2
+        # unconstrained_scale = autoregressive_params[..., :split_idx]
+        # shift = autoregressive_params[..., split_idx:]
+        # return unconstrained_scale, shift
+        autoregressive_params = autoregressive_params.view(
+            -1, self.features, self._output_dim_multiplier()
+        )
+        unconstrained_scale = autoregressive_params[..., 0]
+        shift = autoregressive_params[..., 1]
+        return unconstrained_scale, shift
+    
 #######################
 # base transforms
 
@@ -179,20 +271,34 @@ def base_nsf_transform(
     tail_bound: float = 3.0,
     random_permute: bool = False,
     affine_autoreg_layer: bool = False,
+    constrained_affine_autoreg_layer: bool = False,
     linear_layer: bool = False,
+    u_linear_layer: bool = False,
     nn_kwargs: NNKwargs = {},
 ) -> list[Transform]:
     """
     An autoregressive RQS transform of configurable depth.
     """
     transforms: list[Transform] = []
+
+    if "hidden_features" not in nn_kwargs:
+        nn_kwargs["hidden_features"] = dim * 2
+
     specified_nn_kwargs = configure_nn(nn_kwargs)
 
-    if affine_autoreg_layer:
+    if affine_autoreg_layer or constrained_affine_autoreg_layer:
+        
+        if affine_autoreg_layer:
+            constrain = None
+        elif constrained_affine_autoreg_layer:
+            def constrain(unc_scale):
+                return 1e-6 + torch.nn.functional.sigmoid(unc_scale) * 2 
+        
         transforms.append(
             MaskedAffineAutoregressiveTransform(
                 features=dim,
                 context_features=condition_dim,
+                scale_constraint=constrain,
                 **specified_nn_kwargs,
             )
         )
@@ -203,6 +309,9 @@ def base_nsf_transform(
 
         if layer > 0 and linear_layer:
             transforms.append(LULinear(dim, identity_init=True))
+
+        if layer > 0 and u_linear_layer:
+            transforms.append(UnitLULinear(dim, identity_init=True))
 
         transforms.append(
             MaskedPiecewiseRationalQuadraticAutoregressiveTransform(
@@ -321,6 +430,8 @@ class ExperimentFlow(Flow):
             final_rotation_transformation = HouseholderSequence(dim, dim)
         elif final_rotation == "lu":
             final_rotation_transformation = LULinear(features=dim)
+        elif final_rotation == "unit_lu":
+            final_rotation_transformation = UnitLULinear(features=dim)
 
         if constraint_transformation is None:
             constraint_transformation = IdentityTransform()
@@ -329,8 +440,8 @@ class ExperimentFlow(Flow):
         # samples are generated by X = transform.inverse(Z)
         transformations = [
             constraint_transformation,
-            final_rotation_transformation,
             final_transformation,
+            final_rotation_transformation,
             CompositeTransform(base_transformations),
         ]
 
@@ -342,14 +453,14 @@ class ExperimentFlow(Flow):
     def get_constraint_transformation(self):
         return self._transform._transforms[0]
 
-    def get_final_rotation(self):
+    def get_final_transformation(self):
         return self._transform._transforms[1]
 
-    def set_final_rotation(self, transformation: Transform):
-        self._transform._transforms[1] = transformation
-
-    def get_final_transformation(self):
+    def get_final_rotation(self):
         return self._transform._transforms[2]
+
+    def set_final_rotation(self, transformation: Transform):
+        self._transform._transforms[2] = transformation
 
     def get_base_transformation(self):
         return self._transform._transforms[3]
@@ -726,11 +837,11 @@ def build_comet(
         assert len(tail_init) == dim
         for ix, tail_df in enumerate(tail_init):
             if tail_df == 0.0:
-                tail_transform.tails[ix].lower_xi = torch.tensor(1 / 1000.0)
-                tail_transform.tails[ix].upper_xi = torch.tensor(1 / 1000.0)
+                tail_transform.tails[ix].lower_xi = 1 / 1000.0
+                tail_transform.tails[ix].upper_xi = 1 / 1000.0
             else:
-                tail_transform.tails[ix].lower_xi = torch.tensor(1 / tail_df)
-                tail_transform.tails[ix].upper_xi = torch.tensor(1 / tail_df)
+                tail_transform.tails[ix].lower_xi = 1 / tail_df
+                tail_transform.tails[ix].upper_xi = 1 / tail_df
 
     final_transform = CompositeTransform([tail_transform, Logit()])
 
