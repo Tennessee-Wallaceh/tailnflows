@@ -3,6 +3,7 @@ from functools import partial
 from tailnflows.models import flows
 from tailnflows.train import data_fit
 from tailnflows.utils import load_torch_data, add_raw_data, parallel_runner
+from tailnflows.models.preprocessing import inverse_and_lad as t_to_norm_inverse_and_lad
 
 DEFAULT_DTYPE = torch.float32
 
@@ -88,7 +89,7 @@ def g_normal(dim, nuisance_df, x_trn):
 
 
 def comet(dim, nuisance_df, x_trn):
-    tail_init = nuisance_df * torch.ones(dim)
+    tail_init = [nuisance_df] * dim
     return flows.build_comet(
         dim,
         use="density_estimation",
@@ -105,13 +106,20 @@ model_definitions = {
     # "gtaf": gtaf,
     # "m_normal": m_normal,
     # "g_normal": g_normal,
-    "comet": comet,
+    # "comet": comet,
+    "normal_preprocess": normal,
 }
 
 # ttf tends to converge faster, so lower num epoch
 # gtaf sometimes needs a little longer to converge
 model_opt_params = {
     "normal": {
+        "lr": 5e-3,
+        "num_epochs": 2000,
+        "batch_size": None,
+        "early_stop_patience": 100,
+    },
+    "normal_preprocess": {
         "lr": 5e-3,
         "num_epochs": 2000,
         "batch_size": None,
@@ -165,6 +173,19 @@ model_opt_params = {
 Experiment code
 """
 
+def get_preprocessor(dfs):
+    def _preprocess(x):
+        z, lad = t_to_norm_inverse_and_lad(
+            x.cpu(), 
+            [
+                df if df > 0 else 100.
+                for df in dfs
+            ]
+        )
+        return z.to(DEFAULT_DTYPE).to(x.device), lad.to(DEFAULT_DTYPE).to(x.device)
+
+    return _preprocess
+
 
 def load_synthetic_data(dim, nuisance_df, repeat):
     readable_df = str(nuisance_df).replace(".", ",")
@@ -199,6 +220,12 @@ def run_experiment(
     else:
         device = "cpu"
 
+     # create model and train
+    if model_label.endswith('preprocess'):
+        preprocessor = get_preprocessor(dim * [nuisance_df])
+    else:
+        preprocessor = None
+
     # prepare data
     dataset = load_synthetic_data(dim, nuisance_df, repeat)
     x = dataset["data"]
@@ -221,10 +248,11 @@ def run_experiment(
         x_val.to(DEFAULT_DTYPE).to(device),
         x_tst.to(DEFAULT_DTYPE).to(device),
         lr=opt_params["lr"],
-        num_epochs=opt_params["num_epochs"],
+        num_steps=opt_params["num_epochs"],
         batch_size=opt_params["batch_size"],
         early_stop_patience=opt_params["early_stop_patience"],
         label=f"{experiment_ix}|{label}-d:{dim}-nu:{nuisance_df:.1f}",
+        preprocess_transformation=preprocessor,
     )
 
     tst_loss, tst_ix, losses, vlosses, hook_data = fit_data
@@ -257,10 +285,11 @@ def run_experiment(
 
 def configured_experiments():
     model_labels = model_definitions.keys()
+    model_labels = ['normal_preprocess']
     seed = 2
-    out_path = "2024-05-synth-de-earlystop"
+    out_path = "2024-11-synth-de-comet"
     nuisance_dfs = [0.5, 1.0, 2.0, 30.0]
-    target_d = [5, 10]
+    target_d = [5, 50]
     num_repeats = 10
 
     experiments = [
@@ -279,7 +308,7 @@ def configured_experiments():
         for model_label in model_labels
     ]
 
-    parallel_runner(run_experiment, experiments, max_runs=5)
+    parallel_runner(run_experiment, experiments, max_runs=10)
 
 
 if __name__ == "__main__":
