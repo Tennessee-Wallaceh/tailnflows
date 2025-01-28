@@ -1,6 +1,7 @@
 name: tailnflows 
 channels:
   - defaults
+  - conda-forge
 dependencies:
   - python=3.9
   - pytorch=1.13.1
@@ -11,6 +12,11 @@ dependencies:
   - tqdm
   - pandas
   - seaborn
+  - statsmodels
+  - xarray
+  - bottleneck
+  - dask
+  - netCDF4
   - pip>=3.0.0
   - pip:
     - posteriordb
