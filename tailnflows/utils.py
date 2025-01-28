@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-import sys
 import subprocess
 import pickle
 from typing import Any
@@ -8,55 +7,19 @@ import torch
 import multiprocessing as mp
 import io
 
-IN_COLAB = "google.colab" in sys.modules
-
-pip_dependencies = [
-    "jupyter",
-    "matplotlib",
-    "numpy",
-    "scipy",
-    "tqdm",
-    "pandas",
-    "seaborn",
-    "posteriordb",
-    "jaxtyping",
-    "git+https://github.com/Tennessee-Wallaceh/nflows",
-    "git+https://github.com/Tennessee-Wallaceh/marginalTailAdaptiveFlow.git",
-]
-
 
 def get_project_root():
-    if IN_COLAB:
-        from google.colab import drive
-
-        drive.mount("/content/drive", force_remount=True)
-        # this needs to correspond to actual location in google drive, populated with data
-        os.environ["TAILNFLOWS_HOME"] = "/content/drive/MyDrive/tailnflows"
-
     root_path = os.environ.get("TAILNFLOWS_HOME", Path(__file__).parent.parent)
-
     return root_path
 
-
 def get_data_path():
-    return f"{get_project_root()}/data"
-
+    return os.environ.get("TAILNFLOWS_DATA_HOME", f"{get_project_root()}/data")
 
 def get_experiment_output_path():
-    return f"{get_project_root()}/experiment_output"
+    return os.environ.get("TAILNFLOWS_EXPERIMENT_DIR", f"{get_project_root()}/experiment_output")
 
-
-def configure_colab_env():
-    for requirement in pip_dependencies:
-        result = subprocess.run(["pip", "install", requirement], capture_output=True)
-        if len(result.stderr) > 0:
-            print(result.stderr)
-
-    print("Setup complete!")
-
-
-def add_raw_data(path: str, label: str, data: Any, force_write: bool = False) -> None:
-    rd_path = f"{get_project_root()}/experiment_output/{path}.p"
+def add_experiment_output_data(path: str, label: str, data: Any, force_write: bool = False) -> None:
+    rd_path = f"{get_experiment_output_path()}/{path}.p"
 
     data_file = Path(rd_path)
 
@@ -76,6 +39,29 @@ def add_raw_data(path: str, label: str, data: Any, force_write: bool = False) ->
     raw_data[label].append(data)
     pickle.dump(raw_data, open(rd_path, "wb"))
 
+def add_raw_data(path: str, label: str, data: Any, force_write: bool = False) -> int:
+    rd_path = f"{path}.p"
+
+    data_file = Path(rd_path)
+
+    if not data_file.is_file():
+        data_file.parent.mkdir(parents=True, exist_ok=True)
+        pickle.dump({}, open(rd_path, "wb"))
+    elif not force_write:
+        confirm = input("Experiment data already present, reset? (y/n)")
+        if confirm == "y":
+            pickle.dump({}, open(rd_path, "wb"))
+        else:
+            print("no reset, appending data...")
+
+    raw_data = pickle.load(open(rd_path, "rb"))
+    if label not in raw_data:
+        raw_data[label] = []
+
+    ix = len(raw_data[label])
+    raw_data[label].append(data)
+    pickle.dump(raw_data, open(rd_path, "wb"))
+    return ix
 
 class CPU_Unpickler(pickle.Unpickler):
     # thanks https://stackoverflow.com/questions/56369030/runtimeerror-attempting-to-deserialize-object-on-a-cuda-device
@@ -86,8 +72,15 @@ class CPU_Unpickler(pickle.Unpickler):
             return super().find_class(module, name)
 
 
-def load_raw_data(path: str) -> Any:
+def load_experiment_output_data(path: str) -> Any:
     rd_path = f"{get_project_root()}/experiment_output/{path}.p"
+    try:
+        return pickle.load(open(rd_path, "rb"))
+    except RuntimeError:
+        return CPU_Unpickler(open(rd_path, "rb")).load()
+    
+def load_raw_data(path: str) -> Any:
+    rd_path = f"{path}.p"
     try:
         return pickle.load(open(rd_path, "rb"))
     except RuntimeError:

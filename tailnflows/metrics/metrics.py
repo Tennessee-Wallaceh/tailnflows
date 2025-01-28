@@ -12,7 +12,7 @@ def bootstrap_metric(log_p_x, log_q_x, replications, metric):
     lower = 2 * mean - upper_rep
     upper = 2 * mean - lower_rep
     ci = (lower, mean, upper)
-    return tuple(float(v.detach().numpy()) for v in ci)
+    return tuple(float(v.detach()) for v in ci)
 
 
 def ess(log_p_x, log_q_x):
