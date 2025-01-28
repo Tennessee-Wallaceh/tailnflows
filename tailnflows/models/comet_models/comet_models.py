@@ -5,12 +5,58 @@ Replicated from
 import numpy as np
 import torch
 import torch.nn as nn
-import scipy.stats
 import scipy.optimize
 import statsmodels.api as sm
-
+from scipy import stats
 from scipy.stats import genpareto
 from .interp1d import Interp1d
+
+from nflows.transforms.base import (
+    CompositeTransform,
+    InputOutsideDomain,
+    InverseTransform,
+    Transform,
+)
+from nflows.utils import torchutils
+from torch.nn import functional as F
+
+class Sigmoid(Transform):
+    def __init__(self, temperature=1, eps=1e-6, learn_temperature=False):
+        super().__init__()
+        self.eps = eps
+        if learn_temperature:
+            self.temperature = nn.Parameter(torch.Tensor([temperature]))
+        else:
+            temperature = torch.Tensor([temperature])
+            self.register_buffer('temperature', temperature)
+
+    def forward(self, inputs, context=None):
+        inputs = self.temperature * inputs
+        outputs = torch.sigmoid(inputs)
+        temperature = self.temperature.to(inputs.device)
+        logabsdet = torchutils.sum_except_batch(
+            torch.log(temperature) - F.softplus(-inputs) - F.softplus(inputs)
+        )
+        return outputs, logabsdet
+
+    def inverse(self, inputs, context=None):
+        if torch.min(inputs) < 0 or torch.max(inputs) > 1:
+            raise InputOutsideDomain()
+
+        inputs = torch.clamp(inputs, self.eps, 1 - self.eps)
+        temperature = self.temperature.to(inputs.device)
+        outputs = (1 / temperature) * (torch.log(inputs) - torch.log1p(-inputs))
+        logabsdet = -torchutils.sum_except_batch(
+            torch.log(temperature)
+            - F.softplus(-temperature * outputs)
+            - F.softplus(temperature * outputs)
+        )
+        return outputs, logabsdet
+
+
+class Logit(InverseTransform):
+    def __init__(self, temperature=1, eps=1e-6):
+        super().__init__(Sigmoid(temperature=temperature, eps=eps))
 
 
 class GaussianNLL(nn.Module):
@@ -87,7 +133,7 @@ class TorchGPD(nn.Module):
     Implement collection of two 1D GPD distributions to model tails of distribution.
     """
 
-    def __init__(self, data, a, b, alpha, beta, pos_tail=None, neg_tail=None):
+    def __init__(self, data, a, b, alpha, beta, pos_tail=None, pos_scale=None, neg_tail=None, neg_scale=None):
         super().__init__()
         self.register_buffer("a", a)
         self.register_buffer("b", b)
@@ -97,7 +143,15 @@ class TorchGPD(nn.Module):
 
         # fit parameters of lower tail
         lower_data = data[data < self.alpha].detach().cpu().numpy()
-        if len(lower_data) > 1:
+        if (
+            len(lower_data) > 1 and 
+            neg_tail is not None and 
+            neg_scale is not None
+        ):
+            self.lower_xi = neg_tail
+            self.lower_mu = 0
+            self.lower_sigma = neg_scale
+        elif len(lower_data) > 1:
             self.lower_xi, self.lower_mu, self.lower_sigma = genpareto.fit(
                 self.alpha.detach().cpu().numpy() - lower_data, floc=0, f0=neg_tail
             )
@@ -109,7 +163,15 @@ class TorchGPD(nn.Module):
 
         # fit parameters of upper tail
         upper_data = data[data > self.beta].detach().cpu().numpy()
-        if len(upper_data) > 1:
+        if(
+            len(upper_data) > 1 and 
+            pos_tail is not None and 
+            pos_scale is not None
+        ):
+            self.upper_xi = pos_tail
+            self.upper_mu = 0
+            self.upper_sigma = pos_scale
+        elif len(upper_data) > 1:
             self.upper_xi, self.upper_mu, self.upper_sigma = genpareto.fit(
                 -self.beta.detach().cpu().numpy() + upper_data, floc=0, f0=pos_tail
             )
@@ -257,7 +319,7 @@ class MarginalLayer(nn.Module):
     """
 
     def __init__(
-        self, data, n=1000, a=0.05, b=0.95, pos_tails=None, neg_tails=None, debug=False
+        self, data, n=1000, a=0.05, b=0.95, pos_tails=None, neg_tails=None,  neg_scales=None, pos_scales=None, debug=False
     ):
         super().__init__()
         if isinstance(data, np.ndarray):
@@ -266,14 +328,17 @@ class MarginalLayer(nn.Module):
             data = data
         self.n, self.d = data.shape
         self.n_anchors = min(n, self.n)
-        self.register_buffer("a", torch.FloatTensor([a]))  # lower quantile cutoff
-        self.register_buffer("b", torch.FloatTensor([b]))  # lower quantile cutoff
+        self.register_buffer("a", torch.tensor([a], device=data.device))  # lower quantile cutoff
+        self.register_buffer("b", torch.tensor([b], device=data.device))  # lower quantile cutoff
         data = data.sort(dim=0).values
         lower_idx = int(self.a * self.n)
         upper_idx = int(self.b * self.n) - 1
-        anchor_idxs = torch.randint(
-            low=lower_idx, high=upper_idx, size=(self.n_anchors,)
-        ).to(data.device)
+
+        # EDIT: always include edges into anchor points
+        # this is more robust to KDE issues
+        anchor_idxs = torch.hstack([torch.tensor([lower_idx, upper_idx]), torch.randint(
+            low=lower_idx, high=upper_idx, size=(self.n_anchors - 2,)
+        )])
         self.register_buffer("anchors", data[anchor_idxs])  # sample for KDE
         self.register_buffer("alpha", data[lower_idx])  # lower data cutoff
         self.register_buffer("beta", data[upper_idx])  # upper data cutoff
@@ -287,6 +352,11 @@ class MarginalLayer(nn.Module):
             pos_tails = [None] * self.d
         if neg_tails is None:
             neg_tails = [None] * self.d
+        if pos_scales is None:
+            pos_scales = [None] * self.d
+        if neg_scales is None:
+            neg_scales = [None] * self.d
+
         for i in range(self.d):
             tails.append(
                 TorchGPD(
@@ -296,7 +366,9 @@ class MarginalLayer(nn.Module):
                     alpha=self.alpha[[i]],
                     beta=self.beta[[i]],
                     pos_tail=pos_tails[i],
+                    pos_scale=pos_scales[i],
                     neg_tail=neg_tails[i],
+                    neg_scale=neg_scales[i],
                 )
             )
         self.tails = nn.ModuleList(tails)
@@ -358,8 +430,21 @@ class MarginalLayer(nn.Module):
 
                 # compute CDF i wrt each anchor, then rescale with Definition 11 from Wiese and fix tails
                 body_x = x_i[~tail_region]
+                kde = self.mixture[i]
+
                 kde_support = torch.from_numpy(self.mixture[i].support).to(body_x)
-                kde_cdf = torch.from_numpy(self.mixture[i].cdf).to(body_x)
+                
+                # EDIT: keep CDF calc in torch for big speed up
+                # kde_cdf = torch.from_numpy(self.mixture[i].cdf).to(body_x)
+                # if 'cdf' not in kde._cache:
+                #     g_cdf = 0.5 * (1 + torch.erf((body_x - kde_support[:, None]) / (kde.kernel.h * 2 ** 0.5) ))
+                #     kde_cdf = 1 - torch.sum(g_cdf / len(kde_support), axis=1)
+                #     kde._cache['cdf'] = kde_cdf
+                # else:
+                #     kde_cdf = kde._cache['cdf']
+                kde_cdf = kde.cdf
+
+
                 cdf_i = Interp1d()(kde_support, kde_cdf, body_x)
                 F_a = Interp1d()(kde_support, kde_cdf, self.alpha[[i]])
                 F_b = Interp1d()(kde_support, kde_cdf, self.beta[[i]])
@@ -372,6 +457,7 @@ class MarginalLayer(nn.Module):
                 pdf_i = torch.from_numpy(
                     self.mixture[i].evaluate(body_x.detach().cpu().numpy())
                 ).to(body_x)
+                pdf_i = torch.clip(pdf_i, min=1e-30).to(pdf_out)
                 pdf_out[~tail_region] = (self.b - self.a) / (F_b - F_a) * pdf_i
 
                 # add marginal values

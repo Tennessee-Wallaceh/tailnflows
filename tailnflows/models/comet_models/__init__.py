@@ -1,1 +1,1 @@
-from .comet_models import MarginalLayer
+from .comet_models import MarginalLayer, Logit
