@@ -253,7 +253,7 @@ def run_experiment(
         preprocess_transformation=preprocessor,
     )
 
-    tst_loss, tst_ix, losses, vlosses, hook_data = fit_data
+    tst_loss, val_loss, tst_ix, losses, vlosses, steps, hook_data = fit_data
 
     add_raw_data(
         out_path,

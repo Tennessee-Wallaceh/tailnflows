@@ -7,7 +7,6 @@ import tqdm
 from tailnflows.utils import add_raw_data, get_data_path
 from tailnflows.models.tail_estimation import estimate_df
 
-
 def generate_data_split(split, seed, out_path, x):
     torch.manual_seed(seed)
 
@@ -92,27 +91,24 @@ if __name__ == "__main__":
     x, _ = load_return_data(300)
 
     _generator = partial(generate_data_split, out_path="splits/sp500", x=x)
-    _generator(split=0, seed=42)
-    # with mp.Pool(5) as pool:
-    #     # some arbitraty seq of seeds
-    #     pool.starmap(_generator, enumerate(range(1100, 2100, 100)))
-    # for split, seed in enumerate(range(1100, 2100, 100)):
-    #     _generator(split, seed)
+    for split in range(10):
+        _generator(split, seed=42)
 
     # print('Generating splits + tail estimation for insurance...')
     from tailnflows.targets.data.insurance import load_data
     x = load_data()
-    _generator = partial(generate_data_split, out_path="n_splits/insurance", x=x)
-    _generator(split=0, seed=42)
-    # with mp.Pool(5) as pool:
-    #     # some arbitrary seq of seeds
-    #     pool.starmap(_generator, enumerate(range(1100, 2100, 100)))
+    _generator = partial(generate_data_split, out_path="splits/insurance", x=x)
+    for split in range(10):
+        _generator(split, seed=42)
 
     # print('Generating splits + tail estimation for fama5...')
     from tailnflows.targets.data.fama5 import load_data
     x = load_data()
-    _generator = partial(generate_data_split, out_path="n_splits/fama5", x=x)
-    _generator(split=0, seed=42)
+    _generator = partial(generate_data_split, out_path="splits/fama5", x=x)
+    for split in range(10):
+        _generator(split, seed=42)
+
+    # OR: 
     # with mp.Pool(5) as pool:
     #     # some arbitrary seq of seeds
     #     pool.starmap(_generator, enumerate(range(1100, 2100, 100)))

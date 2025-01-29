@@ -254,7 +254,7 @@ optimisation_overrides = {
         "lr": 5e-4, 
         "num_steps": 5_000, 
         "batch_size": 100, 
-        "early_stop_patience": 300,
+        "early_stop_patience": 500,
         "eval_period": 25,
         "lr_scheduler": None,
     }
@@ -263,20 +263,19 @@ optimisation_overrides = {
 def configured_experiments():
 
     model_labels = [
-        # "normal", 
-        # "normal_preprocess", 
-        # "ttf_fix", 
-        # "ttf", 
+        "normal", 
+        "ttf_fix", 
+        "ttf", 
         "comet", 
-        # "mtaf", 
-        # "gtaf"
+        "mtaf", 
+        "gtaf"
     ]
 
-    experiment_name = "2025-01-newrun"
-    data_sources = ['fama5']
+    experiment_name = "2025-01-tst"
+    data_sources = ['fama5', 'sp500', 'insurance']
 
     opt_params = {
-        "lr": 5e-5, 
+        "lr": 5e-3, 
         "num_steps": 1_00, 
         "batch_size": 512,
         "early_stop_patience": 1_00,
@@ -293,7 +292,8 @@ def configured_experiments():
     experiments = []
     for data_source in data_sources:
         # for repeat_seed in [20, 30, 40]:
-        for repeat_seed in range(2100, 3100, 100):
+        # for repeat_seed in range(2100, 3100, 100):
+        for repeat_seed in [10]:
             for depth in [1]:
                 for model_label in model_labels:
                     
