@@ -29,8 +29,15 @@ Scripts for configuring and running experiments are in `experiments/`.
 
 **Density Estimation with Real Data**
 - files in `experiments/density_estimation_real_data/`
-- first step is to generate splits + estimate tails, using `generate_splits`
+- first step is to generate splits + estimate tails, using `generate_splits.py`
 - configure and run experiments using the `python run_density_estimation.py` script (edit the `configured_experiments` function)
+- analyse results with `results_analysis.ipynb`
+    -note that experiment outputs will be outputted to the path configured in `run_density_estimation.py`
+- I have added a `download_data.py` script as an attempt to provide systematic way to access data, but as it depends on external endpoints it may break. Authors are happy to provide data if required.
+
+**Variational Inference**
+- files in `experiments/variational_inference_heavy_tailed_nuisance/`
+- configure and run experiments using the `python run_heavy_tailed_nuisance.py` script (edit the `configured_experiments` function)
 - analyse results with `results_analysis.ipynb`
     -note that experiment outputs will be outputted to the path configured in `run_density_estimation.py`
 - I have added a `download_data.py` script as an attempt to provide systematic way to access data, but as it depends on external endpoints it may break. Authors are happy to provide data if required.

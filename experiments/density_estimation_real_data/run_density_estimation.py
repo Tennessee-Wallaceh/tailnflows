@@ -271,7 +271,7 @@ def configured_experiments():
         "gtaf"
     ]
 
-    experiment_name = "2025-01-tst"
+    experiment_name = "2025-01-de"
     data_sources = ['fama5', 'sp500', 'insurance']
 
     opt_params = {
