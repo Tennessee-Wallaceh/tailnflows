@@ -74,7 +74,7 @@ def fit_nn(neural_net, nuisance_df, dim, num_epochs=500, lr=1e-3, label="") -> f
 
         loop.set_postfix({"loss": f"{loss.detach():.2f} | * {tst_loss:.2f} {label}"})
 
-    return float(tst_loss)
+    return float(tst_loss.cpu())
 
 
 def run_experiment(
@@ -121,7 +121,7 @@ def run_experiment(
         "df": df,
         "seed": seed,
         "activation": activation_fcn_name,
-        "tst_loss": float(tst_loss.cpu()),
+        "tst_loss": tst_loss,
     }
     add_raw_data(out_path, "", result, force_write=True)
 
@@ -130,12 +130,17 @@ def configured_experiments():
     # python configuration for running number of experiments
     # uses multiprocessing to target multiple runs on 1 GPU so needs
     # to be tuned
-    out_path = "2024-05-nn-nonoise-loss"
-    seeds = range(3)
+    out_path = "2025-01-nn"
     dims = [5, 10, 50, 100]
     dfs = [1.0, 2.0, 5.0, 30.0]
     activations = ["sigmoid", "relu"]
     num_repeats = 10
+
+
+    dims = [5]
+    dfs = [1.0]
+    activations = ["sigmoid", "relu"]
+    num_repeats = 1
 
     experiments = [
         dict(
