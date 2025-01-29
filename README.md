@@ -38,9 +38,8 @@ Scripts for configuring and running experiments are in `experiments/`.
 **Variational Inference**
 - files in `experiments/variational_inference_heavy_tailed_nuisance/`
 - configure and run experiments using the `python run_heavy_tailed_nuisance.py` script (edit the `configured_experiments` function)
-- analyse results with `results_analysis.ipynb`
-    -note that experiment outputs will be outputted to the path configured in `run_density_estimation.py`
-- I have added a `download_data.py` script as an attempt to provide systematic way to access data, but as it depends on external endpoints it may break. Authors are happy to provide data if required.
+- analyse results with `results.ipynb`
+    -note that experiment outputs will be outputted to the path configured in `run_heavy_tailed_nuisance.py`
 
 
 ## Structure
