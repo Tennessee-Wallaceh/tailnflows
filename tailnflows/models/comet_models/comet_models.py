@@ -336,9 +336,14 @@ class MarginalLayer(nn.Module):
 
         # EDIT: always include edges into anchor points
         # this is more robust to KDE issues
-        anchor_idxs = torch.hstack([torch.tensor([lower_idx, upper_idx]), torch.randint(
-            low=lower_idx, high=upper_idx, size=(self.n_anchors - 2,)
-        )])
+        anchor_idxs = torch.hstack([
+            torch.tensor([lower_idx, upper_idx]), 
+            torch.randint(
+                low=lower_idx, 
+                high=upper_idx, 
+                size=(self.n_anchors - 2,)
+            )
+        ])
         self.register_buffer("anchors", data[anchor_idxs])  # sample for KDE
         self.register_buffer("alpha", data[lower_idx])  # lower data cutoff
         self.register_buffer("beta", data[upper_idx])  # upper data cutoff
@@ -442,7 +447,7 @@ class MarginalLayer(nn.Module):
                 #     kde._cache['cdf'] = kde_cdf
                 # else:
                 #     kde_cdf = kde._cache['cdf']
-                kde_cdf = kde.cdf
+                kde_cdf = torch.from_numpy(kde.cdf).to(x_i)
 
 
                 cdf_i = Interp1d()(kde_support, kde_cdf, body_x)

@@ -99,71 +99,69 @@ def comet(dim, nuisance_df, x_trn):
 
 
 model_definitions = {
-    # "normal": normal,
-    # "ttf_m": ttf_m,
-    # "ttf_m_fix": ttf_m_fix,
-    # "mtaf": mtaf,
-    # "gtaf": gtaf,
-    # "m_normal": m_normal,
-    # "g_normal": g_normal,
-    # "comet": comet,
-    "normal_preprocess": normal,
+    "normal": normal,
+    "ttf_m": ttf_m,
+    "ttf_m_fix": ttf_m_fix,
+    "mtaf": mtaf,
+    "gtaf": gtaf,
+    "m_normal": m_normal,
+    "g_normal": g_normal,
+    "comet": comet,
+    # "normal_preprocess": normal,
 }
 
-# ttf tends to converge faster, so lower num epoch
-# gtaf sometimes needs a little longer to converge
 model_opt_params = {
     "normal": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "normal_preprocess": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "ttf_m": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "ttf_m_fix": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "mtaf": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "gtaf": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "m_normal": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "g_normal": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
     "comet": {
         "lr": 5e-3,
-        "num_epochs": 2000,
+        "num_epochs": 5000,
         "batch_size": None,
         "early_stop_patience": 100,
     },
@@ -232,9 +230,9 @@ def run_experiment(
     trn_ix = dataset["split"]["trn"]
     val_ix = dataset["split"]["val"]
     tst_ix = dataset["split"]["tst"]
-    x_trn = x[trn_ix]
-    x_val = x[val_ix]
-    x_tst = x[tst_ix]
+    x_trn = x[trn_ix].to(DEFAULT_DTYPE).to(device)
+    x_val = x[val_ix].to(DEFAULT_DTYPE).to(device)
+    x_tst = x[tst_ix].to(DEFAULT_DTYPE).to(device)
 
     # create model and train
     model_fcn = model_definitions[model_label]
@@ -244,9 +242,9 @@ def run_experiment(
 
     fit_data = data_fit.train(
         model,
-        x_trn.to(DEFAULT_DTYPE).to(device),
-        x_val.to(DEFAULT_DTYPE).to(device),
-        x_tst.to(DEFAULT_DTYPE).to(device),
+        x_trn,
+        x_val,
+        x_tst,
         lr=opt_params["lr"],
         num_steps=opt_params["num_epochs"],
         batch_size=opt_params["batch_size"],
@@ -285,12 +283,12 @@ def run_experiment(
 
 def configured_experiments():
     model_labels = model_definitions.keys()
-    model_labels = ['normal_preprocess']
+    model_labels = ['comet']
     seed = 2
-    out_path = "2024-11-synth-de-comet"
+    out_path = "2024-11-synth-de"
     nuisance_dfs = [0.5, 1.0, 2.0, 30.0]
     target_d = [5, 50]
-    num_repeats = 10
+    num_repeats = 1
 
     experiments = [
         dict(

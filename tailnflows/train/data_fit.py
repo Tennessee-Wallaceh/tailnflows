@@ -3,8 +3,6 @@ from collections.abc import Iterable
 import torch
 from torch import optim
 import tqdm
-import schedulefree
-
 
 def batch_loader(n: int, batch_size: int) -> Iterable[torch.Tensor]:
     batches = torch.randperm(n).split(batch_size)
@@ -33,8 +31,6 @@ def train(
     parameters = list(model.parameters())
     if optimizer is None:
         optimizer = optim.Adam(parameters, lr=lr)
-
-    # optimizer = schedulefree.AdamWScheduleFree(parameters, lr=lr)
 
     if lr_scheduler == "cosine_anneal":
         lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, num_steps, 0)
