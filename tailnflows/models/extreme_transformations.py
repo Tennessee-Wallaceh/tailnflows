@@ -218,6 +218,41 @@ def neg_extreme_transform_and_lad(z, tail_param):
     return x, lad
 
 
+def _g_transform_and_lad(z, p, kappa, epsilon, delta):
+    """Apply alternative gumbel transformation."""
+    x = kappa * torch.pow(z.square() + delta, p / 2.0) + epsilon * z
+    derivative = epsilon + kappa * p * z * torch.pow(z.square() + delta, p / 2.0 - 1)
+    lad = torch.log(torch.abs(derivative))
+    return x, lad
+
+
+def _g_inverse_and_lad(x, p, kappa, epsilon, delta, num_iter: int = 50):
+    """Inverse alternative gumbel transform via Newton iterations."""
+    z = x / (epsilon + kappa)
+    for _ in range(num_iter):
+        f = kappa * torch.pow(z.square() + delta, p / 2.0) + epsilon * z - x
+        df = epsilon + kappa * p * z * torch.pow(z.square() + delta, p / 2.0 - 1)
+        z_next = z - f / df
+        if torch.max(torch.abs(z_next - z)) < 1e-8:
+            z = z_next
+            break
+        z = z_next
+    lad = -torch.log(torch.abs(epsilon + kappa * p * z * torch.pow(z.square() + delta, p / 2.0 - 1)))
+    return z, lad
+
+
+def _exp_tail_transform_and_lad(x, lam):
+    y = (torch.exp(lam * x) - 1.0) / lam
+    lad = lam * x
+    return y, lad
+
+
+def _exp_tail_inverse_and_lad(y, lam):
+    x = torch.log1p(lam * y) / lam
+    lad = -torch.log1p(lam * y)
+    return x, lad
+
+
 def _tail_switch_transform(z, pos_tail, neg_tail, shift, scale):
     sign = torch.sign(z)
     tail_param = torch.where(z > 0, pos_tail, neg_tail)
@@ -1512,6 +1547,79 @@ class CopulaMarginalTransform(Transform):
         sign = torch.sign(x)
         u, lad = _copula_inverse_and_lad(torch.abs(x), tail_param)
         return sign * u, lad.sum(axis=1)
+
+
+class GTransform(Transform):
+    """Alternative Gumbel transform producing exponential tails."""
+
+    def __init__(self, features, p=1.0, kappa=1.0, epsilon=1.0, delta=1.0):
+        self.features = features
+        super().__init__()
+        self.p = torch.tensor(p)
+        self._unc_kappa = torch.nn.Parameter(inv_sftplus(torch.tensor(kappa)))
+        self._unc_epsilon = torch.nn.Parameter(inv_sftplus(torch.tensor(epsilon)))
+        self._unc_delta = torch.nn.Parameter(inv_sftplus(torch.tensor(delta)))
+
+    @property
+    def kappa(self):
+        return softplus(self._unc_kappa)
+
+    @property
+    def epsilon(self):
+        return softplus(self._unc_epsilon)
+
+    @property
+    def delta(self):
+        return softplus(self._unc_delta)
+
+    def forward(self, z, context=None):
+        x, lad = _g_transform_and_lad(z, self.p, self.kappa, self.epsilon, self.delta)
+        return x, lad.sum(axis=1)
+
+    def inverse(self, x, context=None):
+        z, lad = _g_inverse_and_lad(x, self.p, self.kappa, self.epsilon, self.delta)
+        return z, lad.sum(axis=1)
+
+
+class ExpTailTransform(Transform):
+    """Transform exponential tail to Frechet tail."""
+
+    def __init__(self, features, lam=1.0):
+        self.features = features
+        super().__init__()
+        self._unc_lam = torch.nn.Parameter(inv_sftplus(torch.tensor(lam)))
+
+    @property
+    def lam(self):
+        return softplus(self._unc_lam)
+
+    def forward(self, x, context=None):
+        y, lad = _exp_tail_transform_and_lad(x, self.lam)
+        return y, lad.sum(axis=1)
+
+    def inverse(self, y, context=None):
+        x, lad = _exp_tail_inverse_and_lad(y, self.lam)
+        return x, lad.sum(axis=1)
+
+
+class FullTailMarginalTransform(Transform):
+    """Composite transform applying G then exponential Frechet T."""
+
+    def __init__(self, features, *, p=1.0, kappa=1.0, epsilon=1.0, delta=1.0, lam=1.0):
+        super().__init__()
+        self.features = features
+        self.g = GTransform(features, p=p, kappa=kappa, epsilon=epsilon, delta=delta)
+        self.t = ExpTailTransform(features, lam=lam)
+
+    def forward(self, z, context=None):
+        x, lad1 = self.g.forward(z, context)
+        y, lad2 = self.t.forward(x, context)
+        return y, lad1 + lad2
+
+    def inverse(self, y, context=None):
+        x, lad2 = self.t.inverse(y, context)
+        z, lad1 = self.g.inverse(x, context)
+        return z, lad1 + lad2
 
 
 class MaskedExtremeAutoregressiveTransform(AutoregressiveTransform):
