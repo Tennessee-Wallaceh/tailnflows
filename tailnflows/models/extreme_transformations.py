@@ -701,6 +701,108 @@ class TailAffineMarginalTransform(Transform):
         self._unc_neg_tail.requires_grad = False
 
 
+class AsymmetricTailAffineMarginalTransform(Transform):
+    def __init__(
+        self,
+        features,
+        pos_tail_init=None,
+        neg_tail_init=None,
+        shift_init=None,
+        scale_init=None,
+    ):
+        self.features = features
+        super(AsymmetricTailAffineMarginalTransform, self).__init__()
+
+        # random inits if needed
+        if pos_tail_init is None:
+            pos_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample([features])
+
+        if neg_tail_init is None:
+            neg_tail_init = torch.distributions.Uniform(
+                LOW_TAIL_INIT, HIGH_TAIL_INIT
+            ).sample([features])
+
+        if shift_init is None:
+            shift_init = torch.zeros([features])
+
+        if scale_init is None:
+            scale_init = torch.ones([features])
+
+        assert torch.Size([features]) == pos_tail_init.shape
+        assert torch.Size([features]) == neg_tail_init.shape
+        assert torch.Size([features]) == shift_init.shape
+        assert torch.Size([features]) == scale_init.shape
+
+        # convert to unconstrained versions
+        self._unc_pos_tail = torch.nn.parameter.Parameter(inv_sftplus(pos_tail_init))
+        self._unc_neg_tail = torch.nn.parameter.Parameter(inv_sftplus(neg_tail_init))
+        self.shift = torch.nn.parameter.Parameter(shift_init)
+        self._unc_scale = torch.nn.parameter.Parameter(inv_sftplus(scale_init))
+
+    @property
+    def pos_tail(self):
+        return softplus(self._unc_pos_tail)
+
+    @property
+    def neg_tail(self):
+        return softplus(self._unc_neg_tail)
+
+    @property
+    def scale(self):
+        return 1e-3 + softplus(self._unc_scale)
+
+    def inverse(self, z, context=None):
+        """light -> heavy"""
+        
+        # tail transform
+        rescale = torch.tensor(SQRT_PI / SQRT_2) # ensures agreement on lad at the origin 
+        pos_x, pos_lad = _extreme_inverse_and_lad(torch.abs(z) / rescale, self.pos_tail)
+        neg_x, neg_lad = _extreme_transform_and_lad(torch.abs(z) * rescale, self.neg_tail)
+        neg_x = -neg_x
+
+        x = torch.where(z > 0, pos_x, neg_x)
+        lad = torch.where(
+            z > 0, 
+            pos_lad - torch.log(rescale), 
+            neg_lad + torch.log(rescale)
+        )
+
+        # affine
+        x = x * self.scale + self.shift
+
+        lad -= torch.log(self.scale)
+        lad.sum(axis=1)
+        return z, lad.sum(axis=1)
+
+    def forward(self, x, context=None):
+        """
+        Data -> Noise
+        +tail heavy -> light
+        -tail light -> heavy
+        """
+        # affine
+        x = (x - self.shift) / self.scale
+
+        # tail transform
+        rescale = torch.tensor(SQRT_PI / SQRT_2) # ensures agreement on lad at the origin 
+        pos_z, pos_lad = _extreme_inverse_and_lad(torch.abs(x) / rescale, self.pos_tail)
+        neg_z, neg_lad = _extreme_transform_and_lad(torch.abs(x) * rescale, self.neg_tail)
+        neg_z = -neg_z
+
+        z = torch.where(x > 0, pos_z, neg_z)
+        lad = torch.where(
+            z > 0, 
+            pos_lad - torch.log(rescale), 
+            neg_lad + torch.log(rescale)
+        )
+
+        lad -= torch.log(self.scale)
+
+        return z, lad.sum(axis=1)
+
+
 class TailSwitchMarginalTransform(Transform):
     def __init__(
         self,
