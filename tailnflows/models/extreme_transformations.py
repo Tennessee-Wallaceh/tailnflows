@@ -772,8 +772,7 @@ class AsymmetricTailAffineMarginalTransform(Transform):
         # affine
         x = x * self.scale + self.shift
 
-        lad -= torch.log(self.scale)
-        lad.sum(axis=1)
+        lad += torch.log(self.scale)
         return z, lad.sum(axis=1)
 
     def forward(self, x, context=None):
